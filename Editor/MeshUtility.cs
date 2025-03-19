@@ -2,13 +2,17 @@ using UnityEngine;
 using UnityEditor;
 using System.Collections.Generic;
 using System.Linq;
-using Unity.Collections;
 
 namespace VRChatAutoClothingTool
 {
+    /// <summary>
+    /// 基本的なメッシュ処理機能を提供するユーティリティクラス
+    /// </summary>
     public static class MeshUtility
     {
-        // スキンメッシュの調整処理
+        /// <summary>
+        /// スキンメッシュの調整処理
+        /// </summary>
         public static SkinnedMeshRenderer AdjustSkinnedMesh(SkinnedMeshRenderer renderer, Dictionary<Transform, Transform> boneMapping, Vector3 scaleFactor)
         {
             if (renderer == null || renderer.sharedMesh == null) return renderer;
@@ -50,8 +54,6 @@ namespace VRChatAutoClothingTool
             
             adjustedMesh.bindposes = bindposes;
             
-            // ボーンウェイトの調整（必要に応じて）
-            
             // 新しいレンダラーを設定
             renderer.bones = newBones;
             renderer.sharedMesh = adjustedMesh;
@@ -72,7 +74,9 @@ namespace VRChatAutoClothingTool
             return renderer;
         }
         
-        // メッシュのスケール調整
+        /// <summary>
+        /// メッシュのスケール調整
+        /// </summary>
         public static void ScaleMesh(Mesh mesh, Vector3 scale)
         {
             if (mesh == null) return;
@@ -98,163 +102,9 @@ namespace VRChatAutoClothingTool
             }
         }
         
-        // 頂点ウェイトを再分配
-        public static void RedistributeWeights(Mesh mesh, Transform[] bones, Dictionary<int, int> boneIndexMapping)
-        {
-            if (mesh == null || bones == null || boneIndexMapping == null) return;
-            
-            // ボーンウェイト情報を取得
-            NativeArray<byte> bonesPerVertex = mesh.GetBonesPerVertex();
-            NativeArray<BoneWeight1> weights = mesh.GetAllBoneWeights();
-            
-            List<BoneWeight1> newWeights = new List<BoneWeight1>();
-            int currentWeightIndex = 0;
-            
-            // 各頂点のボーンウェイトを処理
-            for (int vertIndex = 0; vertIndex < bonesPerVertex.Length; vertIndex++)
-            {
-                int boneCount = bonesPerVertex[vertIndex];
-                float weightSum = 0;
-                
-                // この頂点に影響するすべてのボーンのウェイトを取得
-                List<BoneWeight1> vertexWeights = new List<BoneWeight1>();
-                
-                for (int j = 0; j < boneCount; j++)
-                {
-                    BoneWeight1 weight = weights[currentWeightIndex + j];
-                    
-                    // ボーンインデックスをマッピングで変換
-                    if (boneIndexMapping.TryGetValue(weight.boneIndex, out int newIndex))
-                    {
-                        weight.boneIndex = newIndex;
-                    }
-                    
-                    vertexWeights.Add(weight);
-                    weightSum += weight.weight;
-                }
-                
-                // ウェイトを正規化（合計が1になるようにする）
-                if (weightSum > 0 && vertexWeights.Count > 0)
-                {
-                    for (int j = 0; j < vertexWeights.Count; j++)
-                    {
-                        BoneWeight1 normalizedWeight = vertexWeights[j];
-                        normalizedWeight.weight /= weightSum;
-                        newWeights.Add(normalizedWeight);
-                    }
-                }
-                
-                currentWeightIndex += boneCount;
-            }
-            
-            // 新しいボーンウェイトをメッシュに設定
-            var newBonesPerVertex = bonesPerVertex;
-            var nativeWeights = new NativeArray<BoneWeight1>(newWeights.ToArray(), Allocator.Temp);
-            mesh.SetBoneWeights(newBonesPerVertex, nativeWeights);
-            nativeWeights.Dispose();
-            
-            // NativeArrayのリソースを解放
-            if (weights.IsCreated)
-            {
-                weights.Dispose();
-            }
-            if (bonesPerVertex.IsCreated)
-            {
-                bonesPerVertex.Dispose();
-            }
-        }
-        
-        // バインドポーズを再計算
-        public static void RecalculateBindPoses(Mesh mesh, Transform rootBone, Transform[] bones)
-        {
-            if (mesh == null || rootBone == null || bones == null) return;
-            
-            Matrix4x4[] bindPoses = new Matrix4x4[bones.Length];
-            
-            // 各ボーンに対してバインドポーズ行列を計算
-            for (int i = 0; i < bones.Length; i++)
-            {
-                if (bones[i] != null)
-                {
-                    // ルートボーンを基準にしたワールド空間からローカル空間への変換行列
-                    bindPoses[i] = bones[i].worldToLocalMatrix * rootBone.localToWorldMatrix;
-                }
-                else
-                {
-                    bindPoses[i] = Matrix4x4.identity;
-                }
-            }
-            
-            mesh.bindposes = bindPoses;
-        }
-        
-        // メッシュを新しいボーンセットに合わせて最適化
-        public static Mesh OptimizeMesh(Mesh sourceMesh, Transform[] originalBones, Transform[] newBones)
-        {
-            if (sourceMesh == null || originalBones == null || newBones == null) return null;
-            
-            // メッシュを複製
-            Mesh optimizedMesh = Object.Instantiate(sourceMesh);
-            optimizedMesh.name = sourceMesh.name + "_Optimized";
-            
-            // ボーンマッピングを構築
-            var boneMapping = new Dictionary<int, int>();
-            for (int i = 0; i < originalBones.Length; i++)
-            {
-                Transform originalBone = originalBones[i];
-                
-                // 名前でマッチングを試みる
-                for (int j = 0; j < newBones.Length; j++)
-                {
-                    if (newBones[j] != null && originalBone != null && 
-                        newBones[j].name == originalBone.name)
-                    {
-                        boneMapping[i] = j;
-                        break;
-                    }
-                }
-            }
-            
-            // ボーンのインデックスが変わった場合、ボーンウェイトの再分配
-            if (boneMapping.Count > 0)
-            {
-                RedistributeWeights(optimizedMesh, newBones, boneMapping);
-            }
-            
-            // バインドポーズの再計算
-            // 新しいボーンの親を探す
-            Transform rootBone = FindRootBone(newBones);
-            if (rootBone != null)
-            {
-                RecalculateBindPoses(optimizedMesh, rootBone, newBones);
-            }
-            
-            return optimizedMesh;
-        }
-        
-        // ボーンのルートを見つける
-        private static Transform FindRootBone(Transform[] bones)
-        {
-            if (bones == null || bones.Length == 0) return null;
-            
-            foreach (var bone in bones)
-            {
-                if (bone != null)
-                {
-                    // Hipsまたは最上位のボーンを探す
-                    if (bone.name.Contains("Hips") || bone.name.Contains("Root") || 
-                        (bone.parent != null && !bones.Contains(bone.parent)))
-                    {
-                        return bone;
-                    }
-                }
-            }
-            
-            // 見つからない場合は最初の非nullボーンを返す
-            return bones.FirstOrDefault(b => b != null);
-        }
-        
-        // マテリアルのテクスチャスケーリングを調整
+        /// <summary>
+        /// マテリアルのテクスチャスケーリングを調整
+        /// </summary>
         public static void AdjustMaterialTextureScale(Material material, Vector3 scaleFactor)
         {
             if (material == null) return;
@@ -286,7 +136,9 @@ namespace VRChatAutoClothingTool
             }
         }
         
-        // メッシュのミラーリング
+        /// <summary>
+        /// メッシュのミラーリング
+        /// </summary>
         public static Mesh MirrorMesh(Mesh sourceMesh, Vector3 mirrorAxis)
         {
             if (sourceMesh == null) return null;
@@ -324,8 +176,6 @@ namespace VRChatAutoClothingTool
             mirroredMesh.vertices = vertices;
             mirroredMesh.normals = normals;
             
-            // UVのミラーリング（オプション）
-            
             // トライアングルの向きを反転
             int[] triangles = mirroredMesh.triangles;
             for (int i = 0; i < triangles.Length; i += 3)
@@ -344,7 +194,9 @@ namespace VRChatAutoClothingTool
             return mirroredMesh;
         }
         
-        // メッシュを統合
+        /// <summary>
+        /// メッシュを統合
+        /// </summary>
         public static Mesh CombineMeshes(SkinnedMeshRenderer[] renderers, Transform rootBone)
         {
             if (renderers == null || renderers.Length == 0 || rootBone == null) return null;
@@ -390,395 +242,59 @@ namespace VRChatAutoClothingTool
             
             combinedMesh.bindposes = bindposes;
             
-            // ボーンウェイトの再マッピング（詳細な実装は省略）
-            
             return combinedMesh;
         }
         
-        // メッシュのボーンウェイトを可視化するための色を生成
-        public static Color[] GenerateBoneWeightColors(Mesh mesh, int boneIndex)
+        /// <summary>
+        /// ボーンのルートを見つける
+        /// </summary>
+        public static Transform FindRootBone(Transform[] bones)
         {
-            if (mesh == null) return null;
+            if (bones == null || bones.Length == 0) return null;
             
-            Vector3[] vertices = mesh.vertices;
-            Color[] colors = new Color[vertices.Length];
-            
-            // ボーンウェイト情報を取得
-            NativeArray<byte> bonesPerVertex = mesh.GetBonesPerVertex();
-            NativeArray<BoneWeight1> weights = mesh.GetAllBoneWeights();
-            int weightIndex = 0;
-            
-            for (int i = 0; i < vertices.Length; i++)
+            foreach (var bone in bones)
             {
-                float weight = 0f;
-                int boneCount = bonesPerVertex[i];
-                
-                // このボーンに対応するウェイトを探す
-                for (int j = 0; j < boneCount; j++)
+                if (bone != null)
                 {
-                    BoneWeight1 boneWeight = weights[weightIndex + j];
-                    
-                    if (boneWeight.boneIndex == boneIndex)
+                    // Hipsまたは最上位のボーンを探す
+                    if (bone.name.Contains("Hips") || bone.name.Contains("Root") || 
+                        (bone.parent != null && !bones.Contains(bone.parent)))
                     {
-                        weight = boneWeight.weight;
-                        break;
+                        return bone;
                     }
                 }
-                
-                // ウェイトに基づいて色を設定（赤→青のグラデーション）
-                colors[i] = new Color(weight, 0f, 1f - weight, 1f);
-                
-                weightIndex += boneCount;
             }
             
-            // NativeArrayのリソース解放
-            if (weights.IsCreated)
-            {
-                weights.Dispose();
-            }
-            if (bonesPerVertex.IsCreated)
-            {
-                bonesPerVertex.Dispose();
-            }
-            
-            return colors;
+            // 見つからない場合は最初の非nullボーンを返す
+            return bones.FirstOrDefault(b => b != null);
         }
         
-        // アバターと衣装の貫通をチェックして調整する（改良版）
-        public static void AdjustClothingPenetration(GameObject avatarObject, GameObject clothingObject, float pushOutDistance = 0.01f)
+        /// <summary>
+        /// スキンメッシュレンダラーの一覧からMeshをベイクして取得
+        /// </summary>
+        public static List<Mesh> BakeMeshes(List<SkinnedMeshRenderer> renderers)
         {
-            if (avatarObject == null || clothingObject == null) return;
+            List<Mesh> bakedMeshes = new List<Mesh>();
             
-            // 貫通チェックの閾値とプッシュアウト距離を制限
-            pushOutDistance = Mathf.Min(pushOutDistance, 0.003f);
-            float penetrationThreshold = 0.015f; // 貫通と見なす距離の閾値
-            
-            Debug.Log($"貫通チェック開始: 閾値 = {penetrationThreshold}, 押し出し距離 = {pushOutDistance}");
-            
-            // アバターのスキンメッシュを取得 - Bodyという名前を含むものを優先
-            var avatarRenderers = avatarObject.GetComponentsInChildren<SkinnedMeshRenderer>();
-            
-            if (avatarRenderers.Length == 0) return;
-            
-            // BodyまたはBodySecondaryという名前を含むレンダラーを優先
-            List<SkinnedMeshRenderer> priorityRenderers = new List<SkinnedMeshRenderer>();
-            List<SkinnedMeshRenderer> otherRenderers = new List<SkinnedMeshRenderer>();
-            
-            foreach (var renderer in avatarRenderers)
+            foreach (var renderer in renderers)
             {
-                string rendererName = renderer.name.ToLower();
-                if (rendererName.Contains("body"))
+                if (renderer != null && renderer.sharedMesh != null)
                 {
-                    priorityRenderers.Add(renderer);
-                    Debug.Log($"Body関連のメッシュを優先処理対象に追加: {renderer.name}");
-                }
-                else
-                {
-                    otherRenderers.Add(renderer);
+                    Mesh bakedMesh = new Mesh();
+                    renderer.BakeMesh(bakedMesh);
+                    bakedMeshes.Add(bakedMesh);
+                    
+                    // メッシュ名を設定（デバッグ用）
+                    bakedMesh.name = $"Baked_{renderer.name}";
                 }
             }
             
-            // 優先順位の高いレンダラーがない場合、すべてのレンダラーを使用
-            if (priorityRenderers.Count == 0)
-            {
-                priorityRenderers = otherRenderers;
-                otherRenderers.Clear();
-            }
-            
-            // 衣装のスキンメッシュを取得
-            var clothingRenderers = clothingObject.GetComponentsInChildren<SkinnedMeshRenderer>();
-            if (clothingRenderers.Length == 0) return;
-            
-            // 衝突判定用のアバターメッシュを生成（優先順位の高いもの）
-            List<Mesh> priorityMeshes = new List<Mesh>();
-            List<Matrix4x4> priorityMatrices = new List<Matrix4x4>();
-            
-            foreach (var renderer in priorityRenderers)
-            {
-                Mesh bakedMesh = new Mesh();
-                renderer.BakeMesh(bakedMesh);
-                priorityMeshes.Add(bakedMesh);
-                priorityMatrices.Add(renderer.transform.localToWorldMatrix);
-            }
-            
-            // 衝突判定用のアバターメッシュを生成（その他）
-            List<Mesh> otherMeshes = new List<Mesh>();
-            List<Matrix4x4> otherMatrices = new List<Matrix4x4>();
-            
-            foreach (var renderer in otherRenderers)
-            {
-                Mesh bakedMesh = new Mesh();
-                renderer.BakeMesh(bakedMesh);
-                otherMeshes.Add(bakedMesh);
-                otherMatrices.Add(renderer.transform.localToWorldMatrix);
-            }
-            
-            // 貫通チェック結果をログに出力するためのカウンター
-            int totalVertices = 0;
-            int adjustedVertices = 0;
-            
-            // 各衣装メッシュに対して処理
-            foreach (var clothingRenderer in clothingRenderers)
-            {
-                if (clothingRenderer.sharedMesh == null) continue;
-                
-                // 衣装の現在のメッシュを取得
-                Mesh clothingMesh = clothingRenderer.sharedMesh;
-                
-                // 編集可能なメッシュへのコピーを作成
-                Mesh adjustedMesh = Object.Instantiate(clothingMesh);
-                Vector3[] clothingVertices = adjustedMesh.vertices;
-                totalVertices += clothingVertices.Length;
-                
-                // 衣装のローカル→ワールド変換行列
-                Matrix4x4 clothingLocalToWorld = clothingRenderer.localToWorldMatrix;
-                Matrix4x4 clothingWorldToLocal = clothingLocalToWorld.inverse;
-                
-                bool meshModified = false;
-                
-                // まず優先メッシュで貫通チェック
-                bool[] vertexChecked = new bool[clothingVertices.Length]; // 既にチェック済みの頂点を記録
-                
-                // 優先メッシュでの貫通チェック
-                ProcessPenetration(
-                    clothingVertices, 
-                    clothingLocalToWorld, 
-                    clothingWorldToLocal,
-                    priorityMeshes, 
-                    priorityMatrices, 
-                    penetrationThreshold, 
-                    pushOutDistance,
-                    ref adjustedVertices,
-                    ref meshModified,
-                    vertexChecked);
-                
-                // 次にその他のメッシュで残りの頂点をチェック
-                ProcessPenetration(
-                    clothingVertices, 
-                    clothingLocalToWorld, 
-                    clothingWorldToLocal,
-                    otherMeshes, 
-                    otherMatrices, 
-                    penetrationThreshold, 
-                    pushOutDistance,
-                    ref adjustedVertices,
-                    ref meshModified,
-                    vertexChecked);
-                
-                // メッシュが変更された場合のみ更新
-                if (meshModified)
-                {
-                    // 法線再計算のためのバックアップ
-                    int[] triangles = adjustedMesh.triangles;
-                    
-                    adjustedMesh.vertices = clothingVertices;
-                    adjustedMesh.triangles = triangles; // 三角形情報を再設定
-                    adjustedMesh.RecalculateBounds();
-                    adjustedMesh.RecalculateNormals();
-                    
-                    // アセットとして保存
-                    string assetPath = $"Assets/AdjustedMeshes/{clothingRenderer.gameObject.name}_NoPenetration.asset";
-                    string directory = System.IO.Path.GetDirectoryName(assetPath);
-                    if (!System.IO.Directory.Exists(directory))
-                    {
-                        System.IO.Directory.CreateDirectory(directory);
-                    }
-                    
-                    AssetDatabase.CreateAsset(adjustedMesh, assetPath);
-                    AssetDatabase.SaveAssets();
-                    
-                    // 新しいメッシュを適用
-                    clothingRenderer.sharedMesh = adjustedMesh;
-                }
-            }
-            
-            // 処理結果をログに出力
-            Debug.Log($"貫通チェック完了: 合計 {totalVertices} 頂点中 {adjustedVertices} 頂点を調整しました。");
-            
-            // 一時メッシュを破棄
-            foreach (var mesh in priorityMeshes)
-            {
-                Object.DestroyImmediate(mesh);
-            }
-            foreach (var mesh in otherMeshes)
-            {
-                Object.DestroyImmediate(mesh);
-            }
+            return bakedMeshes;
         }
         
-        // 貫通処理のヘルパーメソッド
-        private static void ProcessPenetration(
-            Vector3[] clothingVertices,
-            Matrix4x4 clothingLocalToWorld,
-            Matrix4x4 clothingWorldToLocal,
-            List<Mesh> avatarMeshes,
-            List<Matrix4x4> avatarMatrices,
-            float penetrationThreshold,
-            float pushOutDistance,
-            ref int adjustedVertices,
-            ref bool meshModified,
-            bool[] vertexChecked)
-        {
-            for (int i = 0; i < clothingVertices.Length; i++)
-            {
-                // 既にチェック済みの頂点はスキップ
-                if (vertexChecked[i]) continue;
-                
-                // 衣装の頂点をワールド座標に変換
-                Vector3 worldVertex = clothingLocalToWorld.MultiplyPoint3x4(clothingVertices[i]);
-                
-                // 各アバターメッシュとの貫通チェック
-                bool penetrationDetected = false;
-                Vector3 bestAdjustmentDirection = Vector3.zero;
-                float minPenetrationDepth = float.MaxValue;
-                
-                for (int meshIndex = 0; meshIndex < avatarMeshes.Count; meshIndex++)
-                {
-                    Mesh avatarMesh = avatarMeshes[meshIndex];
-                    Matrix4x4 avatarMatrix = avatarMatrices[meshIndex];
-                    Matrix4x4 avatarWorldToLocal = avatarMatrix.inverse;
-                    
-                    // アバターのローカル座標に変換
-                    Vector3 avatarLocalVertex = avatarWorldToLocal.MultiplyPoint3x4(worldVertex);
-                    
-                    // アバターのバウンディングボックスをチェック
-                    Bounds avatarBounds = avatarMesh.bounds;
-                    avatarBounds.Expand(0.05f); // 境界を少し広げて余裕を持たせる
-                    
-                    if (!avatarBounds.Contains(avatarLocalVertex))
-                    {
-                        continue; // この頂点はアバターの範囲外
-                    }
-                    
-                    // アバターの三角形との貫通チェック
-                    Vector3[] avatarVertices = avatarMesh.vertices;
-                    int[] avatarTriangles = avatarMesh.triangles;
-                    
-                    // 三角形の数が多い場合はサンプリングレートを下げる
-                    int step = avatarTriangles.Length > 3000 ? 6 : 3;
-                    
-                    for (int t = 0; t < avatarTriangles.Length; t += step)
-                    {
-                        if (t + 2 >= avatarTriangles.Length) continue;
-                        
-                        Vector3 a = avatarVertices[avatarTriangles[t]];
-                        Vector3 b = avatarVertices[avatarTriangles[t + 1]];
-                        Vector3 c = avatarVertices[avatarTriangles[t + 2]];
-                        
-                        // 三角形の法線を計算
-                        Vector3 triangleNormal = Vector3.Cross(b - a, c - a).normalized;
-                        
-                        // 三角形上の最近点を計算
-                        Vector3 closestPoint = ClosestPointOnTriangle(avatarLocalVertex, a, b, c);
-                        
-                        // 距離を計算
-                        float distance = Vector3.Distance(avatarLocalVertex, closestPoint);
-                        
-                        // 点と三角形の法線方向の内外判定
-                        float dotProduct = Vector3.Dot(avatarLocalVertex - closestPoint, triangleNormal);
-                        
-                        // 貫通を検出（距離が小さく、点が三角形の裏側にある場合）
-                        if (dotProduct < 0 && distance < penetrationThreshold)
-                        {
-                            penetrationDetected = true;
-                            
-                            // より浅い貫通の場合、その方向に調整
-                            if (distance < minPenetrationDepth)
-                            {
-                                minPenetrationDepth = distance;
-                                // ワールド座標に変換した法線方向
-                                bestAdjustmentDirection = avatarMatrix.MultiplyVector(triangleNormal).normalized;
-                            }
-                            
-                            // 大きな貫通を見つけたら、他の三角形の探索をスキップ
-                            if (distance < 0.005f) break;
-                        }
-                    }
-                    
-                    // 大きな貫通が見つかったら、他のメッシュのチェックをスキップ
-                    if (penetrationDetected && minPenetrationDepth < 0.005f) break;
-                }
-                
-                // 貫通が検出された場合、頂点を調整
-                if (penetrationDetected)
-                {
-                    // 法線方向に頂点を押し出す（最小貫通深度 + 余裕分）
-                    Vector3 adjustedWorldVertex = worldVertex + bestAdjustmentDirection * (minPenetrationDepth + pushOutDistance);
-                    
-                    // 衣装のローカル座標に戻す
-                    clothingVertices[i] = clothingWorldToLocal.MultiplyPoint3x4(adjustedWorldVertex);
-                    
-                    meshModified = true;
-                    adjustedVertices++;
-                }
-                
-                // この頂点はチェック済みとマーク
-                vertexChecked[i] = true;
-            }
-        }
-        
-        // 三角形上の最近点を計算
-        private static Vector3 ClosestPointOnTriangle(Vector3 point, Vector3 a, Vector3 b, Vector3 c)
-        {
-            // 点から三角形への最近点を計算
-            Vector3 ab = b - a;
-            Vector3 ac = c - a;
-            Vector3 ap = point - a;
-            
-            float d1 = Vector3.Dot(ab, ap);
-            float d2 = Vector3.Dot(ac, ap);
-            
-            // 点がaの外側にある場合
-            if (d1 <= 0 && d2 <= 0)
-                return a;
-            
-            // 点がbの外側にある場合
-            Vector3 bp = point - b;
-            float d3 = Vector3.Dot(ab, bp);
-            float d4 = Vector3.Dot(ac, bp);
-            if (d3 >= 0 && d4 <= d3)
-                return b;
-            
-            // 点がabエッジの外側にある場合
-            float vc = d1 * d4 - d3 * d2;
-            if (vc <= 0 && d1 >= 0 && d3 <= 0)
-            {
-                float v = d1 / (d1 - d3);
-                return a + v * ab;
-            }
-            
-            // 点がcの外側にある場合
-            Vector3 cp = point - c;
-            float d5 = Vector3.Dot(ab, cp);
-            float d6 = Vector3.Dot(ac, cp);
-            if (d6 >= 0 && d5 <= d6)
-                return c;
-            
-            // 点がacエッジの外側にある場合
-            float vb = d5 * d2 - d1 * d6;
-            if (vb <= 0 && d2 >= 0 && d6 <= 0)
-            {
-                float w = d2 / (d2 - d6);
-                return a + w * ac;
-            }
-            
-            // 点がbcエッジの外側にある場合
-            float va = d3 * d6 - d5 * d4;
-            if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0)
-            {
-                float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
-                return b + w * (c - b);
-            }
-            
-            // 三角形内部の点
-            float denom = 1.0f / (va + vb + vc);
-            float v2 = vb * denom;
-            float w2 = vc * denom;
-            
-            return a + ab * v2 + ac * w2;
-        }
-        
-        // 衣装のサイズを微調整 (修正版)
+        /// <summary>
+        /// 衣装のサイズを微調整
+        /// </summary>
         public static void AdjustClothingSize(GameObject clothingObject, float sizeAdjustment)
         {
             if (clothingObject == null) return;
@@ -789,7 +305,9 @@ namespace VRChatAutoClothingTool
             rootTransform.localScale = baseScale * sizeAdjustment;
         }
         
-        // 衣装の位置を微調整
+        /// <summary>
+        /// 衣装の位置を微調整
+        /// </summary>
         public static void AdjustClothingPosition(GameObject clothingObject, Vector3 positionOffset)
         {
             if (clothingObject == null) return;
@@ -799,7 +317,9 @@ namespace VRChatAutoClothingTool
             rootTransform.position += positionOffset;
         }
         
-        // 衣装の回転を微調整
+        /// <summary>
+        /// 衣装の回転を微調整
+        /// </summary>
         public static void AdjustClothingRotation(GameObject clothingObject, Vector3 rotationOffset)
         {
             if (clothingObject == null) return;
