@@ -50,6 +50,15 @@ namespace VRChatAutoClothingTool
         {
             "Proximal", "Intermediate", "Distal"
         };
+
+        // 追加のボーン名パターン（ドット形式とアンダースコア形式の両方に対応）
+        private static readonly string[] additionalBonePatterns = new string[]
+        {
+            "UpperLeg.L", "UpperLeg_L",
+            "UpperLeg.R", "UpperLeg_R",
+            "Shoulder.L", "Shoulder_L",
+            "Shoulder.R", "Shoulder_R"
+        };
         
         // コンストラクタ
         public BoneAdjuster(GameObject avatarObject, GameObject clothingObject, Vector3 scaleFactor)
@@ -73,6 +82,9 @@ namespace VRChatAutoClothingTool
             
             // ボーン名リストを生成
             var boneNames = new List<string>(humanoidBoneNames);
+            
+            // 追加のボーン名パターンを追加
+            boneNames.AddRange(additionalBonePatterns);
             
             // 指のボーン名を追加
             foreach (var hand in new[] { "Left", "Right" })
@@ -280,6 +292,23 @@ namespace VRChatAutoClothingTool
             
             // 標準ヒューマノイドボーンのマッピング
             foreach (var boneName in humanoidBoneNames)
+            {
+                if (avatarBones.ContainsKey(boneName))
+                {
+                    var avatarBone = avatarBones[boneName];
+                    Transform clothingBone = FindClosestBone(boneName);
+                    
+                    mappings.Add(new BoneMapping
+                    {
+                        BoneName = boneName,
+                        AvatarBone = avatarBone.Transform,
+                        ClothingBone = clothingBone
+                    });
+                }
+            }
+            
+            // 追加ボーンパターンのマッピング
+            foreach (var boneName in additionalBonePatterns)
             {
                 if (avatarBones.ContainsKey(boneName))
                 {
