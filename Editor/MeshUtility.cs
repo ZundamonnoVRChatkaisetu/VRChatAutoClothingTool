@@ -443,5 +443,217 @@ namespace VRChatAutoClothingTool
             
             return colors;
         }
+        
+        // アバターと衣装の貫通をチェックして調整する
+        public static void AdjustClothingPenetration(GameObject avatarObject, GameObject clothingObject, float pushOutDistance = 0.01f)
+        {
+            if (avatarObject == null || clothingObject == null) return;
+            
+            // アバターのスキンメッシュを取得
+            var avatarRenderers = avatarObject.GetComponentsInChildren<SkinnedMeshRenderer>();
+            if (avatarRenderers.Length == 0) return;
+            
+            // 衣装のスキンメッシュを取得
+            var clothingRenderers = clothingObject.GetComponentsInChildren<SkinnedMeshRenderer>();
+            if (clothingRenderers.Length == 0) return;
+            
+            // 衝突判定用のアバターメッシュを生成
+            Mesh avatarCollisionMesh = new Mesh();
+            avatarRenderers[0].BakeMesh(avatarCollisionMesh);
+            
+            // アバターのメッシュの三角形データを取得
+            Vector3[] avatarVertices = avatarCollisionMesh.vertices;
+            int[] avatarTriangles = avatarCollisionMesh.triangles;
+            
+            // 世界座標からアバターのローカル座標への変換行列
+            Matrix4x4 avatarWorldToLocal = avatarObject.transform.worldToLocalMatrix;
+            
+            // 各衣装メッシュに対して処理
+            foreach (var clothingRenderer in clothingRenderers)
+            {
+                if (clothingRenderer.sharedMesh == null) continue;
+                
+                // 衣装の現在のメッシュを取得
+                Mesh clothingMesh = clothingRenderer.sharedMesh;
+                
+                // 編集可能なメッシュへのコピーを作成
+                Mesh adjustedMesh = Object.Instantiate(clothingMesh);
+                Vector3[] clothingVertices = adjustedMesh.vertices;
+                
+                // ローカル→ワールド→アバターローカル座標への変換
+                Matrix4x4 clothingLocalToWorld = clothingRenderer.localToWorldMatrix;
+                
+                bool meshModified = false;
+                
+                // 各頂点に対して処理
+                for (int i = 0; i < clothingVertices.Length; i++)
+                {
+                    // 衣装の頂点をワールド座標に変換
+                    Vector3 worldVertex = clothingLocalToWorld.MultiplyPoint3x4(clothingVertices[i]);
+                    
+                    // アバターのローカル座標に変換
+                    Vector3 avatarLocalVertex = avatarWorldToLocal.MultiplyPoint3x4(worldVertex);
+                    
+                    // アバターとの最近距離を計算
+                    float closestDistance = float.MaxValue;
+                    Vector3 closestPoint = Vector3.zero;
+                    Vector3 closestNormal = Vector3.up;
+                    
+                    // アバターの各三角形との距離をチェック
+                    for (int t = 0; t < avatarTriangles.Length; t += 3)
+                    {
+                        Vector3 a = avatarVertices[avatarTriangles[t]];
+                        Vector3 b = avatarVertices[avatarTriangles[t + 1]];
+                        Vector3 c = avatarVertices[avatarTriangles[t + 2]];
+                        
+                        // 三角形上の最近点を計算
+                        Vector3 point = ClosestPointOnTriangle(avatarLocalVertex, a, b, c);
+                        
+                        // 距離を計算
+                        float distance = Vector3.Distance(avatarLocalVertex, point);
+                        
+                        // より近い点が見つかった場合、更新
+                        if (distance < closestDistance)
+                        {
+                            closestDistance = distance;
+                            closestPoint = point;
+                            
+                            // 三角形の法線を計算
+                            closestNormal = Vector3.Cross(b - a, c - a).normalized;
+                        }
+                    }
+                    
+                    // アバター内部に頂点がある場合（距離がマイナスまたは非常に小さい）
+                    float dotProduct = Vector3.Dot(avatarLocalVertex - closestPoint, closestNormal);
+                    if (dotProduct < 0 && closestDistance < 0.05f)
+                    {
+                        // 法線方向に頂点を押し出す
+                        Vector3 offsetVertex = avatarLocalVertex + closestNormal * (0.05f + pushOutDistance);
+                        
+                        // 衣装の座標系に戻す
+                        clothingVertices[i] = clothingLocalToWorld.inverse.MultiplyPoint3x4(
+                            avatarObject.transform.TransformPoint(offsetVertex));
+                        
+                        meshModified = true;
+                    }
+                }
+                
+                // メッシュが変更された場合のみ更新
+                if (meshModified)
+                {
+                    adjustedMesh.vertices = clothingVertices;
+                    adjustedMesh.RecalculateBounds();
+                    adjustedMesh.RecalculateNormals();
+                    
+                    // アセットとして保存
+                    string assetPath = $"Assets/AdjustedMeshes/{clothingRenderer.gameObject.name}_NoPenetration.asset";
+                    string directory = System.IO.Path.GetDirectoryName(assetPath);
+                    if (!System.IO.Directory.Exists(directory))
+                    {
+                        System.IO.Directory.CreateDirectory(directory);
+                    }
+                    
+                    AssetDatabase.CreateAsset(adjustedMesh, assetPath);
+                    AssetDatabase.SaveAssets();
+                    
+                    // 新しいメッシュを適用
+                    clothingRenderer.sharedMesh = adjustedMesh;
+                }
+            }
+            
+            // 一時メッシュを破棄
+            Object.DestroyImmediate(avatarCollisionMesh);
+        }
+        
+        // 三角形上の最近点を計算
+        private static Vector3 ClosestPointOnTriangle(Vector3 point, Vector3 a, Vector3 b, Vector3 c)
+        {
+            // 点から三角形への最近点を計算
+            Vector3 ab = b - a;
+            Vector3 ac = c - a;
+            Vector3 ap = point - a;
+            
+            float d1 = Vector3.Dot(ab, ap);
+            float d2 = Vector3.Dot(ac, ap);
+            
+            // 点がaの外側にある場合
+            if (d1 <= 0 && d2 <= 0)
+                return a;
+            
+            // 点がbの外側にある場合
+            Vector3 bp = point - b;
+            float d3 = Vector3.Dot(ab, bp);
+            float d4 = Vector3.Dot(ac, bp);
+            if (d3 >= 0 && d4 <= d3)
+                return b;
+            
+            // 点がabエッジの外側にある場合
+            float vc = d1 * d4 - d3 * d2;
+            if (vc <= 0 && d1 >= 0 && d3 <= 0)
+            {
+                float v = d1 / (d1 - d3);
+                return a + v * ab;
+            }
+            
+            // 点がcの外側にある場合
+            Vector3 cp = point - c;
+            float d5 = Vector3.Dot(ab, cp);
+            float d6 = Vector3.Dot(ac, cp);
+            if (d6 >= 0 && d5 <= d6)
+                return c;
+            
+            // 点がacエッジの外側にある場合
+            float vb = d5 * d2 - d1 * d6;
+            if (vb <= 0 && d2 >= 0 && d6 <= 0)
+            {
+                float w = d2 / (d2 - d6);
+                return a + w * ac;
+            }
+            
+            // 点がbcエッジの外側にある場合
+            float va = d3 * d6 - d5 * d4;
+            if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0)
+            {
+                float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+                return b + w * (c - b);
+            }
+            
+            // 三角形内部の点
+            float denom = 1.0f / (va + vb + vc);
+            float v2 = vb * denom;
+            float w2 = vc * denom;
+            
+            return a + ab * v2 + ac * w2;
+        }
+        
+        // 衣装のサイズを微調整
+        public static void AdjustClothingSize(GameObject clothingObject, Vector3 adjustmentFactor)
+        {
+            if (clothingObject == null) return;
+            
+            // ルートオブジェクトのスケールを調整
+            Transform rootTransform = clothingObject.transform;
+            rootTransform.localScale = Vector3.Scale(rootTransform.localScale, adjustmentFactor);
+        }
+        
+        // 衣装の位置を微調整
+        public static void AdjustClothingPosition(GameObject clothingObject, Vector3 positionOffset)
+        {
+            if (clothingObject == null) return;
+            
+            // ルートオブジェクトの位置を調整
+            Transform rootTransform = clothingObject.transform;
+            rootTransform.position += positionOffset;
+        }
+        
+        // 衣装の回転を微調整
+        public static void AdjustClothingRotation(GameObject clothingObject, Vector3 rotationOffset)
+        {
+            if (clothingObject == null) return;
+            
+            // ルートオブジェクトの回転を調整
+            Transform rootTransform = clothingObject.transform;
+            rootTransform.rotation *= Quaternion.Euler(rotationOffset);
+        }
     }
 }
