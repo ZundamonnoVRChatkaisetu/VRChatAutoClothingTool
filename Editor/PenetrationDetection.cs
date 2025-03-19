@@ -135,6 +135,12 @@ namespace VRChatAutoClothingTool
             // 各衣装メッシュに対して処理
             foreach (var clothingRenderer in clothingRenderers)
             {
+                // レンダラーが無効なら有効化する
+                if (!clothingRenderer.enabled)
+                {
+                    clothingRenderer.enabled = true;
+                }
+                
                 if (clothingRenderer.sharedMesh == null) continue;
                 
                 // 衣装の現在のメッシュを取得（内容をコピー）
@@ -159,6 +165,7 @@ namespace VRChatAutoClothingTool
                 bool meshModified = false;
                 // 各頂点が処理済みかどうかを記録する配列
                 bool[] vertexChecked = new bool[clothingVertices.Length];
+                bool[] vertexDeformed = new bool[clothingVertices.Length]; // 形状維持処理用
                 
                 // 優先メッシュでの貫通チェック
                 Debug.Log($"優先メッシュ ({priorityMeshes.Count} 個) との貫通チェック");
@@ -174,7 +181,8 @@ namespace VRChatAutoClothingTool
                     boundingBoxExpansion,
                     ref adjustedVertices,
                     ref meshModified,
-                    vertexChecked
+                    vertexChecked,
+                    vertexDeformed
                 );
                 
                 // その他のメッシュでの貫通チェック（優先メッシュで処理されなかった頂点のみ）
@@ -193,7 +201,8 @@ namespace VRChatAutoClothingTool
                         boundingBoxExpansion,
                         ref adjustedVertices,
                         ref meshModified,
-                        vertexChecked
+                        vertexChecked,
+                        vertexDeformed
                     );
                 }
                 
@@ -205,7 +214,7 @@ namespace VRChatAutoClothingTool
                         clothingVertices,
                         originalVertices,
                         vertexAdjacency,
-                        vertexChecked,
+                        vertexDeformed,
                         preserveStrength);
                 }
                 
@@ -422,7 +431,8 @@ namespace VRChatAutoClothingTool
             float boundingBoxExpansion,
             ref int adjustedVertices,
             ref bool meshModified,
-            bool[] vertexChecked)
+            bool[] vertexChecked,
+            bool[] vertexDeformed)
         {
             if (avatarMeshes.Count == 0) return;
             
@@ -574,7 +584,7 @@ namespace VRChatAutoClothingTool
                 clothingVertices[vertexIndex] = clothingWorldToLocal.MultiplyPoint3x4(adjustedWorldVertex);
                 
                 // この頂点が変形されたとマーク
-                vertexChecked[vertexIndex] = true;
+                vertexDeformed[vertexIndex] = true;
                 
                 meshModified = true;
                 adjustedVertices++;
