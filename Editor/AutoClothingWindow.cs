@@ -19,12 +19,16 @@ namespace VRChatAutoClothingTool
         
         // スケーリング設定
         private float globalScaleFactor = 1.0f;
-        private bool maintainProportions = true;
-        private Vector3 customScaleFactor = Vector3.one;
         
         // 処理ステータス
         private string statusMessage = "";
         private bool isProcessing = false;
+        
+        // 微調整フラグ
+        private bool showFineAdjustmentPanel = false;
+        private Vector3 positionAdjustment = Vector3.zero;
+        private Vector3 rotationAdjustment = Vector3.zero;
+        private float sizeAdjustment = 1.0f;
         
         [MenuItem("ずん解/衣装自動調整ツール")]
         public static void ShowWindow()
@@ -50,6 +54,13 @@ namespace VRChatAutoClothingTool
             
             DrawButtonsSection();
             EditorGUILayout.Space(10);
+            
+            // 微調整パネルを表示（自動調整後に表示される）
+            if (showFineAdjustmentPanel)
+            {
+                DrawFineAdjustmentSection();
+                EditorGUILayout.Space(10);
+            }
             
             DrawStatusSection();
             
@@ -114,21 +125,7 @@ namespace VRChatAutoClothingTool
             
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             
-            maintainProportions = EditorGUILayout.Toggle("プロポーションを維持", maintainProportions);
-            
-            if (maintainProportions)
-            {
-                globalScaleFactor = EditorGUILayout.Slider("グローバルスケール", globalScaleFactor, 0.1f, 3.0f);
-            }
-            else
-            {
-                EditorGUILayout.LabelField("カスタムスケール");
-                EditorGUI.indentLevel++;
-                customScaleFactor.x = EditorGUILayout.Slider("X", customScaleFactor.x, 0.1f, 3.0f);
-                customScaleFactor.y = EditorGUILayout.Slider("Y", customScaleFactor.y, 0.1f, 3.0f);
-                customScaleFactor.z = EditorGUILayout.Slider("Z", customScaleFactor.z, 0.1f, 3.0f);
-                EditorGUI.indentLevel--;
-            }
+            globalScaleFactor = EditorGUILayout.Slider("全体スケール", globalScaleFactor, 0.1f, 3.0f);
             
             EditorGUILayout.EndVertical();
         }
@@ -152,6 +149,92 @@ namespace VRChatAutoClothingTool
             GUI.enabled = true;
             
             EditorGUILayout.EndHorizontal();
+        }
+        
+        private void DrawFineAdjustmentSection()
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            
+            GUILayout.Label("微調整パネル", EditorStyles.boldLabel);
+            EditorGUILayout.HelpBox("以下のスライダーを使って衣装の位置・回転・サイズを微調整できます。", MessageType.Info);
+            
+            EditorGUI.BeginChangeCheck();
+            
+            // サイズ調整
+            EditorGUILayout.Space(5);
+            GUILayout.Label("サイズ調整", EditorStyles.boldLabel);
+            sizeAdjustment = EditorGUILayout.Slider("サイズ倍率", sizeAdjustment, 0.5f, 2.0f);
+            
+            // 位置調整
+            EditorGUILayout.Space(5);
+            GUILayout.Label("位置調整", EditorStyles.boldLabel);
+            positionAdjustment.x = EditorGUILayout.Slider("X位置", positionAdjustment.x, -0.5f, 0.5f);
+            positionAdjustment.y = EditorGUILayout.Slider("Y位置", positionAdjustment.y, -0.5f, 0.5f);
+            positionAdjustment.z = EditorGUILayout.Slider("Z位置", positionAdjustment.z, -0.5f, 0.5f);
+            
+            // 回転調整
+            EditorGUILayout.Space(5);
+            GUILayout.Label("回転調整", EditorStyles.boldLabel);
+            rotationAdjustment.x = EditorGUILayout.Slider("X回転", rotationAdjustment.x, -180f, 180f);
+            rotationAdjustment.y = EditorGUILayout.Slider("Y回転", rotationAdjustment.y, -180f, 180f);
+            rotationAdjustment.z = EditorGUILayout.Slider("Z回転", rotationAdjustment.z, -180f, 180f);
+            
+            if (EditorGUI.EndChangeCheck())
+            {
+                // 値が変更されたらリアルタイムで衣装を調整
+                UpdateFineAdjustment();
+            }
+            
+            EditorGUILayout.Space(10);
+            if (GUILayout.Button("調整をリセット", GUILayout.Height(25)))
+            {
+                ResetFineAdjustment();
+            }
+            
+            EditorGUILayout.EndVertical();
+        }
+        
+        private void UpdateFineAdjustment()
+        {
+            if (clothingObject == null) return;
+            
+            // 保存されている調整前の状態を取得
+            GameObject originalClothing = clothingObject;
+            
+            // サイズ調整
+            Vector3 newScale = originalClothing.transform.localScale;
+            newScale *= sizeAdjustment;
+            originalClothing.transform.localScale = newScale;
+            
+            // 位置調整
+            originalClothing.transform.position = avatarObject.transform.position + positionAdjustment;
+            
+            // 回転調整
+            originalClothing.transform.rotation = avatarObject.transform.rotation * Quaternion.Euler(rotationAdjustment);
+            
+            // シーンビューを更新
+            SceneView.RepaintAll();
+        }
+        
+        private void ResetFineAdjustment()
+        {
+            sizeAdjustment = 1.0f;
+            positionAdjustment = Vector3.zero;
+            rotationAdjustment = Vector3.zero;
+            
+            if (clothingObject != null && avatarObject != null)
+            {
+                clothingObject.transform.position = avatarObject.transform.position;
+                clothingObject.transform.rotation = avatarObject.transform.rotation;
+                
+                // スケールはグローバルスケールファクターを適用
+                Vector3 scaleFactor = new Vector3(globalScaleFactor, globalScaleFactor, globalScaleFactor);
+                clothingObject.transform.localScale = Vector3.one;
+                clothingObject.transform.localScale = Vector3.Scale(clothingObject.transform.localScale, scaleFactor);
+                
+                // シーンビューを更新
+                SceneView.RepaintAll();
+            }
         }
         
         private void DrawStatusSection()
@@ -191,6 +274,18 @@ namespace VRChatAutoClothingTool
                 "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "LeftToes",
                 "RightUpperLeg", "RightLowerLeg", "RightFoot", "RightToes"
             };
+            
+            // ③ 追加のボーン名パターン
+            var additionalBonePatterns = new List<string>
+            {
+                "UpperLeg.L", "UpperLeg_L",
+                "UpperLeg.R", "UpperLeg_R",
+                "Shoulder.L", "Shoulder_L",
+                "Shoulder.R", "Shoulder_R"
+            };
+            
+            // 追加のボーン名パターンを共通ボーン名リストに追加
+            commonBoneNames.AddRange(additionalBonePatterns);
             
             // 指のボーン名を追加
             var fingerNames = new List<string> { "Thumb", "Index", "Middle", "Ring", "Little" };
@@ -278,9 +373,7 @@ namespace VRChatAutoClothingTool
             clothingObject.transform.parent = avatarObject.transform;
             
             // グローバルスケールの適用
-            Vector3 scaleFactor = maintainProportions 
-                ? new Vector3(globalScaleFactor, globalScaleFactor, globalScaleFactor)
-                : customScaleFactor;
+            Vector3 scaleFactor = new Vector3(globalScaleFactor, globalScaleFactor, globalScaleFactor);
             
             // ルート位置の調整
             clothingObject.transform.localPosition = Vector3.zero;
@@ -330,11 +423,22 @@ namespace VRChatAutoClothingTool
                 }
             }
             
-            // 調整完了後に衣装を親から解除するオプション
-            // clothingObject.transform.parent = null;
+            // 衣装とアバターの貫通をチェックして調整
+            MeshUtility.AdjustClothingPenetration(avatarObject, clothingObject);
+            
+            // 調整完了後に衣装を親から解除
+            clothingObject.transform.parent = null;
+            clothingObject.transform.position = avatarObject.transform.position;
+            clothingObject.transform.rotation = avatarObject.transform.rotation;
+            
+            // 微調整パネルを表示
+            showFineAdjustmentPanel = true;
+            sizeAdjustment = 1.0f;
+            positionAdjustment = Vector3.zero;
+            rotationAdjustment = Vector3.zero;
             
             isProcessing = false;
-            statusMessage = "衣装の自動調整が完了しました。必要に応じて手動で微調整してください。";
+            statusMessage = "衣装の自動調整が完了しました。必要に応じて微調整パネルで調整してください。";
             
             // UIの更新
             Repaint();
@@ -365,9 +469,7 @@ namespace VRChatAutoClothingTool
             previewObject.transform.parent = avatarObject.transform;
             
             // スケールの適用
-            Vector3 scaleFactor = maintainProportions 
-                ? new Vector3(globalScaleFactor, globalScaleFactor, globalScaleFactor)
-                : customScaleFactor;
+            Vector3 scaleFactor = new Vector3(globalScaleFactor, globalScaleFactor, globalScaleFactor);
             
             // ルート位置の調整
             previewObject.transform.localPosition = Vector3.zero;
