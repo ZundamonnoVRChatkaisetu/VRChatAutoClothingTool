@@ -47,6 +47,7 @@ namespace VRChatAutoClothingTool
         private bool preferBodyMeshes = true;        // ボディメッシュを優先する
         private float penetrationThreshold = 0.015f; // 貫通とみなす距離の閾値
         private bool preserveMeshShape = true;       // メッシュ形状を維持する
+        private float preserveStrength = 0.5f;       // 形状維持の強度 (0-1)
         
         // UnityのGUIの更新間隔
         private const float GUI_UPDATE_INTERVAL = 0.1f;
@@ -250,6 +251,17 @@ namespace VRChatAutoClothingTool
                     EditorGUILayout.LabelField("詳細設定", EditorStyles.boldLabel);
                     
                     preserveMeshShape = EditorGUILayout.Toggle("メッシュ形状を維持", preserveMeshShape);
+                    
+                    // 形状維持が有効な場合は強度スライダーを表示
+                    if (preserveMeshShape)
+                    {
+                        EditorGUI.indentLevel++;
+                        preserveStrength = EditorGUILayout.Slider("形状維持強度", preserveStrength, 0f, 1f);
+                        EditorGUI.indentLevel--;
+                        
+                        EditorGUILayout.HelpBox("強度が高いほど元の形状を維持しますが、貫通修正が不十分になる場合があります。", MessageType.Info);
+                    }
+                    
                     useAdvancedSampling = EditorGUILayout.Toggle("高精度サンプリング", useAdvancedSampling);
                     preferBodyMeshes = EditorGUILayout.Toggle("ボディメッシュを優先", preferBodyMeshes);
                     
@@ -354,22 +366,10 @@ namespace VRChatAutoClothingTool
                 penetrationPushOutDistance,
                 penetrationThreshold,
                 useAdvancedSampling,
-                preferBodyMeshes
+                preferBodyMeshes,
+                preserveMeshShape,
+                preserveStrength
             );
-            
-            // 貫通チェックが有効な場合、形状維持機能も含めて実行
-            if (enablePenetrationCheck && success)
-            {
-                PenetrationDetection.AdjustClothingPenetration(
-                    avatarObject,
-                    clothingObject,
-                    penetrationPushOutDistance,
-                    penetrationThreshold,
-                    useAdvancedSampling,
-                    preferBodyMeshes,
-                    preserveMeshShape
-                );
-            }
             
             // 微調整パネルを表示
             showFineAdjustmentPanel = true;
@@ -415,7 +415,9 @@ namespace VRChatAutoClothingTool
                 penetrationPushOutDistance,
                 penetrationThreshold,
                 useAdvancedSampling,
-                preferBodyMeshes
+                preferBodyMeshes,
+                preserveMeshShape,
+                preserveStrength
             );
             
             statusMessage = "プレビューを表示しています。30秒後に自動的に削除されます。";
