@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEditor;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 namespace VRChatAutoClothingTool
 {
@@ -34,6 +35,7 @@ namespace VRChatAutoClothingTool
         private Vector3 positionAdjustment = Vector3.zero;
         private Vector3 rotationAdjustment = Vector3.zero;
         private float sizeAdjustment = 1.0f;
+        private float lastSizeAdjustment = 1.0f; // 前回のサイズ調整値を保存
         
         // 貫通検出の設定
         private float penetrationPushOutDistance = 0.001f; // デフォルト値を小さくする（0.001f）
@@ -248,11 +250,11 @@ namespace VRChatAutoClothingTool
             GUILayout.Label("微調整パネル", EditorStyles.boldLabel);
             EditorGUILayout.HelpBox("以下のスライダーを使って衣装の位置・回転・サイズを微調整できます。調整はリアルタイムで反映されます。", MessageType.Info);
             
-            EditorGUI.BeginChangeCheck();
-            
             // サイズ調整
             EditorGUILayout.Space(5);
             GUILayout.Label("サイズ調整", EditorStyles.boldLabel);
+            
+            EditorGUI.BeginChangeCheck();
             float newSizeAdjustment = EditorGUILayout.Slider("サイズ倍率", sizeAdjustment, 0.5f, 2.0f);
             
             // 位置調整
@@ -287,6 +289,7 @@ namespace VRChatAutoClothingTool
                 bool positionChanged = positionAdjustment != newPositionAdjustment;
                 bool rotationChanged = rotationAdjustment != newRotationAdjustment;
                 
+                // サイズ値を更新
                 sizeAdjustment = newSizeAdjustment;
                 positionAdjustment = newPositionAdjustment;
                 rotationAdjustment = newRotationAdjustment;
@@ -315,7 +318,12 @@ namespace VRChatAutoClothingTool
             // サイズ調整
             if (sizeChanged)
             {
-                MeshUtility.AdjustClothingSize(clothingObject, sizeAdjustment);
+                // 直接値を設定するように変更（乗算ではなく代入）
+                Vector3 baseScale = Vector3.one * globalScaleFactor;
+                clothingObject.transform.localScale = baseScale * sizeAdjustment;
+                
+                // 現在のサイズ調整値を保存
+                lastSizeAdjustment = sizeAdjustment;
             }
             
             // 位置調整
@@ -350,10 +358,9 @@ namespace VRChatAutoClothingTool
                 clothingObject.transform.position = avatarObject.transform.position;
                 clothingObject.transform.rotation = avatarObject.transform.rotation;
                 
-                // スケールはグローバルスケールファクターを適用
-                Vector3 scaleFactor = new Vector3(globalScaleFactor, globalScaleFactor, globalScaleFactor);
-                clothingObject.transform.localScale = Vector3.one;
-                clothingObject.transform.localScale = Vector3.Scale(clothingObject.transform.localScale, scaleFactor);
+                // スケールは直接設定
+                Vector3 baseScale = Vector3.one * globalScaleFactor;
+                clothingObject.transform.localScale = baseScale;
                 
                 // 微調整開始フラグをリセット
                 fineAdjustmentStarted = false;
@@ -448,25 +455,61 @@ namespace VRChatAutoClothingTool
                 }
             }
             
-            // アバターのボーンを検索
+            // アバターのボーンを検索 - パターンマッチングを改良
             var avatarBones = new Dictionary<string, Transform>();
             foreach (var boneTransform in avatarTransforms)
             {
                 var boneName = boneTransform.name;
-                if (commonBoneNames.Contains(boneName) || commonBoneNames.Any(b => boneName.Contains(b)))
+                
+                // 正確な名前マッチング
+                if (commonBoneNames.Contains(boneName))
                 {
                     avatarBones[boneName] = boneTransform;
+                    continue;
+                }
+                
+                // パターンマッチングの改良 - ドット/アンダースコア表記に対応
+                foreach (var pattern in commonBoneNames)
+                {
+                    // "Shoulder.L" と "Shoulder_L" を同等に扱う
+                    string normalizedPattern = pattern.Replace('.', '_').Replace('_', '.');
+                    string normalizedBoneName = boneName.Replace('.', '_').Replace('_', '.');
+                    
+                    if (normalizedBoneName.Contains(normalizedPattern) || 
+                        normalizedPattern.Contains(normalizedBoneName))
+                    {
+                        avatarBones[boneName] = boneTransform;
+                        break;
+                    }
                 }
             }
             
-            // 衣装のボーンを検索
+            // 衣装のボーンを検索 - パターンマッチングを改良
             var clothingBones = new Dictionary<string, Transform>();
             foreach (var boneTransform in clothingTransforms)
             {
                 var boneName = boneTransform.name;
-                if (commonBoneNames.Contains(boneName) || commonBoneNames.Any(b => boneName.Contains(b)))
+                
+                // 正確な名前マッチング
+                if (commonBoneNames.Contains(boneName))
                 {
                     clothingBones[boneName] = boneTransform;
+                    continue;
+                }
+                
+                // パターンマッチングの改良
+                foreach (var pattern in commonBoneNames)
+                {
+                    // "Shoulder.L" と "Shoulder_L" を同等に扱う
+                    string normalizedPattern = pattern.Replace('.', '_').Replace('_', '.');
+                    string normalizedBoneName = boneName.Replace('.', '_').Replace('_', '.');
+                    
+                    if (normalizedBoneName.Contains(normalizedPattern) || 
+                        normalizedPattern.Contains(normalizedBoneName))
+                    {
+                        clothingBones[boneName] = boneTransform;
+                        break;
+                    }
                 }
             }
             
@@ -478,7 +521,30 @@ namespace VRChatAutoClothingTool
                 
                 // 同じ名前の衣装ボーンを探す
                 Transform clothingTransform = null;
-                clothingBones.TryGetValue(boneName, out clothingTransform);
+                
+                // 完全一致を試す
+                if (clothingBones.TryGetValue(boneName, out clothingTransform))
+                {
+                    // 既に見つかった場合は何もしない
+                }
+                else
+                {
+                    // 部分一致または類似パターンを探す
+                    string normalizedBoneName = boneName.Replace('.', '_').Replace('_', '.');
+                    
+                    foreach (var clothingBone in clothingBones)
+                    {
+                        string normalizedClothingName = clothingBone.Key.Replace('.', '_').Replace('_', '.');
+                        
+                        // ドット/アンダースコアの違いを無視して一致するかチェック
+                        if (normalizedClothingName.Contains(normalizedBoneName) || 
+                            normalizedBoneName.Contains(normalizedClothingName))
+                        {
+                            clothingTransform = clothingBone.Value;
+                            break;
+                        }
+                    }
+                }
                 
                 // マッピングを追加
                 boneMappings.Add(new BoneMapping
@@ -527,7 +593,7 @@ namespace VRChatAutoClothingTool
             // ルート位置の調整
             clothingObject.transform.localPosition = Vector3.zero;
             clothingObject.transform.localRotation = Quaternion.identity;
-            clothingObject.transform.localScale = Vector3.Scale(clothingObject.transform.localScale, scaleFactor);
+            clothingObject.transform.localScale = scaleFactor; // 直接設定
             
             // 各ボーンのマッピングに基づいて調整
             foreach (var mapping in boneMappings)
@@ -587,6 +653,7 @@ namespace VRChatAutoClothingTool
             // 微調整パネルを表示
             showFineAdjustmentPanel = true;
             sizeAdjustment = 1.0f;
+            lastSizeAdjustment = 1.0f;
             positionAdjustment = Vector3.zero;
             rotationAdjustment = Vector3.zero;
             fineAdjustmentStarted = false;
@@ -628,7 +695,7 @@ namespace VRChatAutoClothingTool
             // ルート位置の調整
             previewObject.transform.localPosition = Vector3.zero;
             previewObject.transform.localRotation = Quaternion.identity;
-            previewObject.transform.localScale = Vector3.Scale(previewObject.transform.localScale, scaleFactor);
+            previewObject.transform.localScale = scaleFactor; // 直接設定
             
             // プレビューオブジェクトのボーンを取得
             var previewTransforms = previewObject.GetComponentsInChildren<Transform>();
