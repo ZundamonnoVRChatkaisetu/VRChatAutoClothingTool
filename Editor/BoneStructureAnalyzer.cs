@@ -27,48 +27,58 @@ namespace VRChatAutoClothingTool
             "Upper_Leg.L", "Upper_Leg_L", "Upper_leg.L", "Upper_leg_L",
             "UpperLeg.R", "UpperLeg_R", "Upper.Leg.R", "Upper.Leg_R", 
             "Upper_Leg.R", "Upper_Leg_R", "Upper_leg.R", "Upper_leg_R",
+            "UpperLeg_L_001", "UpperLeg_R_001", "Upper_Leg_L_001", "Upper_Leg_R_001",
             
             // Shoulderの様々なバリエーション
             "Shoulder.L", "Shoulder_L", "shoulder.L", "shoulder_L",
             "Shoulder.R", "Shoulder_R", "shoulder.R", "shoulder_R",
+            "Shoulder_L_001", "Shoulder_R_001",
             
             // 追加のLowerLegバリエーション
             "LowerLeg.L", "LowerLeg_L", "Lower.Leg.L", "Lower.Leg_L", 
             "Lower_Leg.L", "Lower_Leg_L", "Lower_leg.L", "Lower_leg_L",
             "LowerLeg.R", "LowerLeg_R", "Lower.Leg.R", "Lower.Leg_R", 
             "Lower_Leg.R", "Lower_Leg_R", "Lower_leg.R", "Lower_leg_R",
+            "LowerLeg_L_001", "LowerLeg_R_001", "Lower_Leg_L_001", "Lower_Leg_R_001",
             
             // 追加のUpperArmバリエーション
             "UpperArm.L", "UpperArm_L", "Upper.Arm.L", "Upper.Arm_L", 
             "Upper_Arm.L", "Upper_Arm_L", "Upper_arm.L", "Upper_arm_L",
             "UpperArm.R", "UpperArm_R", "Upper.Arm.R", "Upper.Arm_R", 
             "Upper_Arm.R", "Upper_Arm_R", "Upper_arm.R", "Upper_arm_R",
+            "UpperArm_L_001", "UpperArm_R_001", "Upper_Arm_L_001", "Upper_Arm_R_001",
             
             // 追加のLowerArmバリエーション
             "LowerArm.L", "LowerArm_L", "Lower.Arm.L", "Lower.Arm_L", 
             "Lower_Arm.L", "Lower_Arm_L", "Lower_arm.L", "Lower_arm_L",
             "LowerArm.R", "LowerArm_R", "Lower.Arm.R", "Lower.Arm_R", 
             "Lower_Arm.R", "Lower_Arm_R", "Lower_arm.R", "Lower_arm_R",
+            "LowerArm_L_001", "LowerArm_R_001", "Lower_Arm_L_001", "Lower_Arm_R_001",
             
             // 追加の脚バリエーション (leg.L/Rなど)
             "leg.L", "leg_L", "Leg.L", "Leg_L", "LEG.L", "LEG_L",
             "leg.R", "leg_R", "Leg.R", "Leg_R", "LEG.R", "LEG_R",
+            "leg_L_001", "leg_R_001", "Leg_L_001", "Leg_R_001",
             
             // 追加の腕バリエーション (arm.L/Rなど)
             "arm.L", "arm_L", "Arm.L", "Arm_L", "ARM.L", "ARM_L",
             "arm.R", "arm_R", "Arm.R", "Arm_R", "ARM.R", "ARM_R",
+            "arm_L_001", "arm_R_001", "Arm_L_001", "Arm_R_001",
             
             // 足首バリエーション
             "ankle.L", "ankle_L", "Ankle.L", "Ankle_L",
             "ankle.R", "ankle_R", "Ankle.R", "Ankle_R",
+            "ankle_L_001", "ankle_R_001", "Ankle_L_001", "Ankle_R_001",
             
             // 手首バリエーション
             "wrist.L", "wrist_L", "Wrist.L", "Wrist_L",
             "wrist.R", "wrist_R", "Wrist.R", "Wrist_R",
+            "wrist_L_001", "wrist_R_001", "Wrist_L_001", "Wrist_R_001",
             
             // 肩バリエーション
             "clavicle.L", "clavicle_L", "Clavicle.L", "Clavicle_L",
-            "clavicle.R", "clavicle_R", "Clavicle.R", "Clavicle_R"
+            "clavicle.R", "clavicle_R", "Clavicle.R", "Clavicle_R",
+            "clavicle_L_001", "clavicle_R_001", "Clavicle_L_001", "Clavicle_R_001"
         };
         
         // 指のボーン名
@@ -213,11 +223,11 @@ namespace VRChatAutoClothingTool
         private string NormalizeBoneName(string boneName)
         {
             // ドットとアンダースコアを共通文字に置換
-            return boneName.Replace('.', '_').Replace('_', '.');
+            return boneName.Replace('.', '_').Replace(' ', '_');
         }
         
         /// <summary>
-        /// アバターのボーン名に対応する衣装のボーンを探す
+        /// アバターのボーン名に対応する衣装のボーンを探す（改良版）
         /// </summary>
         private Transform FindMatchingClothingBone(string avatarBoneName, Dictionary<string, Transform> clothingBones)
         {
@@ -230,19 +240,65 @@ namespace VRChatAutoClothingTool
             // 正規化された名前でマッチングを試みる
             string normalizedAvatarBoneName = NormalizeBoneName(avatarBoneName).ToLower();
             
-            // 部分一致または類似パターンを探す
+            // 1. セマンティック解析: 同じ部位と左右指定のボーンを優先的に検索
+            string bonePart = ExtractBonePart(normalizedAvatarBoneName);
+            string boneSide = ExtractBoneSide(normalizedAvatarBoneName);
+            
+            if (!string.IsNullOrEmpty(bonePart) && !string.IsNullOrEmpty(boneSide))
+            {
+                // まず同じ部位+側を持つボーンを検索
+                var semanticMatches = new Dictionary<string, float>();
+                foreach (var clothingBone in clothingBones)
+                {
+                    string normalizedClothingName = NormalizeBoneName(clothingBone.Key).ToLower();
+                    
+                    if (normalizedClothingName.Contains(bonePart) && ExtractBoneSide(normalizedClothingName) == boneSide)
+                    {
+                        // スコアの計算: 文字列の長さの差が小さいほど類似度が高い
+                        float lengthDifference = Mathf.Abs(normalizedClothingName.Length - normalizedAvatarBoneName.Length);
+                        float similarity = 1.0f / (1.0f + lengthDifference);
+                        
+                        // upperかlowerを含む場合は、同じupperまたはlowerを含む場合にスコアを上げる
+                        if ((normalizedAvatarBoneName.Contains("upper") && normalizedClothingName.Contains("upper")) ||
+                            (normalizedAvatarBoneName.Contains("lower") && normalizedClothingName.Contains("lower")))
+                        {
+                            similarity += 0.5f;
+                        }
+                        
+                        semanticMatches.Add(clothingBone.Key, similarity);
+                    }
+                }
+                
+                // 最も類似度が高いボーンを返す
+                if (semanticMatches.Count > 0)
+                {
+                    var bestMatch = semanticMatches.OrderByDescending(x => x.Value).First();
+                    return clothingBones[bestMatch.Key];
+                }
+            }
+            
+            // 2. スマートなパターンマッチング
+            Dictionary<string, float> smartMatches = new Dictionary<string, float>();
             foreach (var clothingBone in clothingBones)
             {
                 string normalizedClothingName = NormalizeBoneName(clothingBone.Key).ToLower();
                 
-                // 正規化された名前でスマートマッチング
-                if (IsSmartBoneMatch(normalizedAvatarBoneName, normalizedClothingName))
+                // スマートマッチングのスコアを取得
+                float matchScore = GetSmartMatchScore(normalizedAvatarBoneName, normalizedClothingName);
+                if (matchScore > 0)
                 {
-                    return clothingBone.Value;
+                    smartMatches.Add(clothingBone.Key, matchScore);
                 }
             }
             
-            // Leg/Arm等の基本部位名でフォールバックマッチング
+            // 最も高いスコアのボーンを選択
+            if (smartMatches.Count > 0)
+            {
+                var bestMatch = smartMatches.OrderByDescending(x => x.Value).First();
+                return clothingBones[bestMatch.Key];
+            }
+            
+            // 3. Leg/Arm等の基本部位名でフォールバックマッチング
             foreach (var clothingBone in clothingBones)
             {
                 string normalizedClothingName = NormalizeBoneName(clothingBone.Key).ToLower();
@@ -255,6 +311,117 @@ namespace VRChatAutoClothingTool
             
             // 位置ベースのマッチングを追加（空間的な位置関係で最も近いボーンを見つける）
             return null;
+        }
+        
+        /// <summary>
+        /// ボーン名からボーンの部位（leg, arm等）を抽出
+        /// </summary>
+        private string ExtractBonePart(string normalizedBoneName)
+        {
+            string[] commonParts = new string[] 
+            { 
+                "leg", "arm", "hand", "foot", "shoulder", "head", 
+                "spine", "chest", "hip", "neck",
+                "ankle", "wrist", "elbow", "knee", "clavicle", "toe" 
+            };
+            
+            foreach (var part in commonParts)
+            {
+                if (normalizedBoneName.Contains(part))
+                {
+                    return part;
+                }
+            }
+            
+            return string.Empty;
+        }
+        
+        /// <summary>
+        /// ボーン名から左右の情報を抽出
+        /// </summary>
+        private string ExtractBoneSide(string normalizedBoneName)
+        {
+            if (normalizedBoneName.Contains("left") || normalizedBoneName.Contains("_l") || 
+                normalizedBoneName.EndsWith("l") || normalizedBoneName.Contains(".l"))
+            {
+                return "l";
+            }
+            else if (normalizedBoneName.Contains("right") || normalizedBoneName.Contains("_r") || 
+                    normalizedBoneName.EndsWith("r") || normalizedBoneName.Contains(".r"))
+            {
+                return "r";
+            }
+            
+            return string.Empty;
+        }
+        
+        /// <summary>
+        /// スマートなマッチングスコアを計算
+        /// </summary>
+        private float GetSmartMatchScore(string name1, string name2)
+        {
+            float score = 0;
+            
+            // 完全一致
+            if (name1 == name2) return 10.0f;
+            
+            // 区切り文字を無視した一致
+            string clean1 = name1.Replace("_", "").Replace(".", "");
+            string clean2 = name2.Replace("_", "").Replace(".", "");
+            if (clean1 == clean2) return 9.5f;
+            
+            // 部分一致チェック
+            if (name1.Contains(name2) || name2.Contains(name1)) 
+            {
+                score += 5.0f;
+                
+                // 長さの差が小さいほどスコアを上げる
+                float lengthDifference = Mathf.Abs(name1.Length - name2.Length);
+                score += 3.0f / (1.0f + lengthDifference);
+            }
+            
+            // Upper/Lowerのパターンチェック
+            string[] prefixes = new string[] { "upper", "lower" };
+            foreach (var prefix in prefixes)
+            {
+                if (name1.Contains(prefix) && name2.Contains(prefix))
+                {
+                    score += 2.0f;
+                }
+            }
+            
+            // 左右の一致チェック
+            string side1 = ExtractBoneSide(name1);
+            string side2 = ExtractBoneSide(name2);
+            if (!string.IsNullOrEmpty(side1) && side1 == side2)
+            {
+                score += 2.0f;
+            }
+            
+            // 部位の一致チェック
+            string part1 = ExtractBonePart(name1);
+            string part2 = ExtractBonePart(name2);
+            if (!string.IsNullOrEmpty(part1) && part1 == part2)
+            {
+                score += 2.0f;
+            }
+            
+            // 拡張: Upper_Leg.R と UpperLeg.R の特殊ケース対応
+            string[] specialParts = new string[] { "leg", "arm" };
+            foreach (var part in specialParts)
+            {
+                string pattern1 = "upper_" + part;
+                string pattern2 = "upper" + part;
+                
+                if ((name1.Contains(pattern1) && name2.Contains(pattern2)) ||
+                    (name1.Contains(pattern2) && name2.Contains(pattern1)))
+                {
+                    // UpperLeg_R と Upper_Leg_R のようなパターンを優先的にマッチング
+                    score += 3.0f;
+                }
+            }
+            
+            return score;
         }
         
         /// <summary>
