@@ -43,9 +43,10 @@ namespace VRChatAutoClothingTool
         private float penetrationPushOutDistance = 0.001f; // デフォルト値を小さくする（0.001f）
         private bool showPenetrationSettings = false;
         private bool enablePenetrationCheck = true; // 貫通チェックの有効/無効を切り替えるフラグ
-        private bool useAdvancedSampling = true; // 高精度サンプリングの使用フラグ
-        private bool preferBodyMeshes = true; // ボディメッシュを優先する
+        private bool useAdvancedSampling = true;     // 高精度サンプリングの使用フラグ
+        private bool preferBodyMeshes = true;        // ボディメッシュを優先する
         private float penetrationThreshold = 0.015f; // 貫通とみなす距離の閾値
+        private bool preserveMeshShape = true;       // メッシュ形状を維持する
         
         // UnityのGUIの更新間隔
         private const float GUI_UPDATE_INTERVAL = 0.1f;
@@ -248,6 +249,7 @@ namespace VRChatAutoClothingTool
                     EditorGUILayout.Space(5);
                     EditorGUILayout.LabelField("詳細設定", EditorStyles.boldLabel);
                     
+                    preserveMeshShape = EditorGUILayout.Toggle("メッシュ形状を維持", preserveMeshShape);
                     useAdvancedSampling = EditorGUILayout.Toggle("高精度サンプリング", useAdvancedSampling);
                     preferBodyMeshes = EditorGUILayout.Toggle("ボディメッシュを優先", preferBodyMeshes);
                     
@@ -354,6 +356,20 @@ namespace VRChatAutoClothingTool
                 useAdvancedSampling,
                 preferBodyMeshes
             );
+            
+            // 貫通チェックが有効な場合、形状維持機能も含めて実行
+            if (enablePenetrationCheck && success)
+            {
+                PenetrationDetection.AdjustClothingPenetration(
+                    avatarObject,
+                    clothingObject,
+                    penetrationPushOutDistance,
+                    penetrationThreshold,
+                    useAdvancedSampling,
+                    preferBodyMeshes,
+                    preserveMeshShape
+                );
+            }
             
             // 微調整パネルを表示
             showFineAdjustmentPanel = true;
