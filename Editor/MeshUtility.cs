@@ -444,10 +444,16 @@ namespace VRChatAutoClothingTool
             return colors;
         }
         
-        // アバターと衣装の貫通をチェックして調整する（強化版）
+        // アバターと衣装の貫通をチェックして調整する（修正版）
         public static void AdjustClothingPenetration(GameObject avatarObject, GameObject clothingObject, float pushOutDistance = 0.01f)
         {
             if (avatarObject == null || clothingObject == null) return;
+            
+            // 貫通チェックの閾値とプッシュアウト距離を制限
+            pushOutDistance = Mathf.Min(pushOutDistance, 0.003f);
+            float penetrationThreshold = 0.01f; // 貫通と見なす距離の閾値（小さいほど厳密になる）
+            
+            Debug.Log($"貫通チェック開始: 閾値 = {penetrationThreshold}, 押し出し距離 = {pushOutDistance}");
             
             // アバターのスキンメッシュを取得
             var avatarRenderers = avatarObject.GetComponentsInChildren<SkinnedMeshRenderer>();
@@ -492,8 +498,8 @@ namespace VRChatAutoClothingTool
                 
                 bool meshModified = false;
                 
-                // 各頂点に対して処理
-                for (int i = 0; i < clothingVertices.Length; i++)
+                // 各頂点に対して処理（処理対象を減らすため、一部の頂点のみ処理）
+                for (int i = 0; i < clothingVertices.Length; i += 2) // 隣り合う頂点は近いので、間引いて処理
                 {
                     // 衣装の頂点をワールド座標に変換
                     Vector3 worldVertex = clothingLocalToWorld.MultiplyPoint3x4(clothingVertices[i]);
@@ -512,19 +518,23 @@ namespace VRChatAutoClothingTool
                         // アバターのローカル座標に変換
                         Vector3 avatarLocalVertex = avatarWorldToLocal.MultiplyPoint3x4(worldVertex);
                         
-                        // アバターのバウンディングボックスをチェック
+                        // アバターのバウンディングボックスをチェック（境界を少し広げる）
                         Bounds avatarBounds = avatarMesh.bounds;
+                        avatarBounds.Expand(0.05f); // 境界を少し広げて余裕を持たせる
+                        
                         if (!avatarBounds.Contains(avatarLocalVertex))
                         {
                             continue; // この頂点はアバターの範囲外
                         }
                         
-                        // アバターの各三角形との詳細なチェック
+                        // アバターの三角形をサンプリング（すべての三角形ではなく一部をチェック）
                         Vector3[] avatarVertices = avatarMesh.vertices;
                         int[] avatarTriangles = avatarMesh.triangles;
                         
-                        for (int t = 0; t < avatarTriangles.Length; t += 3)
+                        for (int t = 0; t < avatarTriangles.Length; t += 9) // より少ない三角形をチェック
                         {
+                            if (t + 2 >= avatarTriangles.Length) continue;
+                            
                             Vector3 a = avatarVertices[avatarTriangles[t]];
                             Vector3 b = avatarVertices[avatarTriangles[t + 1]];
                             Vector3 c = avatarVertices[avatarTriangles[t + 2]];
@@ -542,7 +552,7 @@ namespace VRChatAutoClothingTool
                             float dotProduct = Vector3.Dot(avatarLocalVertex - closestPoint, triangleNormal);
                             
                             // 貫通を検出（距離が小さく、点が三角形の裏側にある場合）
-                            if (dotProduct < 0 && distance < 0.05f)
+                            if (dotProduct < 0 && distance < penetrationThreshold)
                             {
                                 penetrationDetected = true;
                                 
@@ -574,7 +584,11 @@ namespace VRChatAutoClothingTool
                 // メッシュが変更された場合のみ更新
                 if (meshModified)
                 {
+                    // 法線再計算のためのバックアップ
+                    int[] triangles = adjustedMesh.triangles;
+                    
                     adjustedMesh.vertices = clothingVertices;
+                    adjustedMesh.triangles = triangles; // 三角形情報を再設定
                     adjustedMesh.RecalculateBounds();
                     adjustedMesh.RecalculateNormals();
                     
