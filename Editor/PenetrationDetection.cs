@@ -41,22 +41,28 @@ namespace VRChatAutoClothingTool
         /// <param name="penetrationThreshold">貫通とみなす距離の閾値</param>
         /// <param name="advancedSampling">高精度サンプリングを使用するか</param>
         /// <param name="preferBodyMeshes">ボディメッシュを優先するか</param>
+        /// <param name="preserveShape">衣装の形状を維持するか</param>
+        /// <param name="preserveStrength">形状維持の強度 (0-1)</param>
         public static void AdjustClothingPenetration(
             GameObject avatarObject, 
             GameObject clothingObject, 
             float pushOutDistance = 0.01f,
             float penetrationThreshold = 0.015f,
             bool advancedSampling = true, 
-            bool preferBodyMeshes = true)
+            bool preferBodyMeshes = true,
+            bool preserveShape = true,
+            float preserveStrength = 0.5f)
         {
             if (avatarObject == null || clothingObject == null) return;
             
             // パラメータの検証と制限
             pushOutDistance = Mathf.Clamp(pushOutDistance, 0.0005f, 0.05f);
             penetrationThreshold = Mathf.Clamp(penetrationThreshold, 0.001f, 0.05f);
+            preserveStrength = Mathf.Clamp01(preserveStrength);
             
             Debug.Log($"貫通チェック開始: 閾値 = {penetrationThreshold}, 押し出し距離 = {pushOutDistance}, " +
-                      $"高度なサンプリング = {advancedSampling}, ボディメッシュ優先 = {preferBodyMeshes}");
+                      $"高度なサンプリング = {advancedSampling}, ボディメッシュ優先 = {preferBodyMeshes}, " +
+                      $"形状維持 = {preserveShape}, 形状維持強度 = {preserveStrength}");
             
             // アバターのスキンメッシュレンダラーを取得
             var avatarRenderers = avatarObject.GetComponentsInChildren<SkinnedMeshRenderer>();
@@ -139,7 +145,12 @@ namespace VRChatAutoClothingTool
                 Debug.Log($"メッシュ '{meshName}' を処理中...");
                 
                 Vector3[] clothingVertices = adjustedMesh.vertices;
+                Vector3[] originalVertices = (Vector3[])clothingVertices.Clone(); // 元の頂点位置を保存
                 totalVertices += clothingVertices.Length;
+                
+                // 頂点の隣接関係を構築（形状維持のために必要）
+                Dictionary<int, List<int>> vertexAdjacency = preserveShape ?
+                    BuildVertexAdjacency(adjustedMesh) : null;
                 
                 // 衣装のローカル→ワールド変換行列
                 Matrix4x4 clothingLocalToWorld = clothingRenderer.localToWorldMatrix;
@@ -184,6 +195,18 @@ namespace VRChatAutoClothingTool
                         ref meshModified,
                         vertexChecked
                     );
+                }
+                
+                // 形状を維持したままスムージングする
+                if (preserveShape && meshModified)
+                {
+                    Debug.Log("メッシュの形状を維持しながらスムージングを適用中...");
+                    SmoothMeshDeformation(
+                        clothingVertices,
+                        originalVertices,
+                        vertexAdjacency,
+                        vertexChecked,
+                        preserveStrength);
                 }
                 
                 // メッシュが変更された場合のみ更新
@@ -233,6 +256,155 @@ namespace VRChatAutoClothingTool
             {
                 Object.DestroyImmediate(mesh);
             }
+        }
+        
+        /// <summary>
+        /// メッシュの頂点の隣接関係を構築
+        /// </summary>
+        private static Dictionary<int, List<int>> BuildVertexAdjacency(Mesh mesh)
+        {
+            Dictionary<int, List<int>> adjacency = new Dictionary<int, List<int>>();
+            int[] triangles = mesh.triangles;
+            
+            // すべての頂点について空のリストを初期化
+            for (int i = 0; i < mesh.vertexCount; i++)
+            {
+                adjacency[i] = new List<int>();
+            }
+            
+            // 三角形の各辺に基づいて隣接関係を構築
+            for (int i = 0; i < triangles.Length; i += 3)
+            {
+                int a = triangles[i];
+                int b = triangles[i + 1];
+                int c = triangles[i + 2];
+                
+                // 重複を避けつつ隣接頂点を追加
+                if (!adjacency[a].Contains(b)) adjacency[a].Add(b);
+                if (!adjacency[a].Contains(c)) adjacency[a].Add(c);
+                if (!adjacency[b].Contains(a)) adjacency[b].Add(a);
+                if (!adjacency[b].Contains(c)) adjacency[b].Add(c);
+                if (!adjacency[c].Contains(a)) adjacency[c].Add(a);
+                if (!adjacency[c].Contains(b)) adjacency[c].Add(b);
+            }
+            
+            return adjacency;
+        }
+        
+        /// <summary>
+        /// メッシュの変形をスムージングして形状を維持
+        /// </summary>
+        private static void SmoothMeshDeformation(
+            Vector3[] currentVertices,
+            Vector3[] originalVertices,
+            Dictionary<int, List<int>> adjacency,
+            bool[] vertexDeformed,
+            float preserveStrength)
+        {
+            // ラプラシアン平滑化のパラメータ
+            int iterations = 3;  // 平滑化の反復回数
+            float lambda = preserveStrength;  // 形状保持の強度 (0-1)
+            
+            // 平滑化用の一時的な配列
+            Vector3[] smoothedVertices = new Vector3[currentVertices.Length];
+            
+            // 現在の頂点位置をコピー
+            System.Array.Copy(currentVertices, smoothedVertices, currentVertices.Length);
+            
+            // 平滑化処理を繰り返す
+            for (int iter = 0; iter < iterations; iter++)
+            {
+                // 各頂点を処理
+                for (int i = 0; i < currentVertices.Length; i++)
+                {
+                    // 変形された頂点とその隣接頂点のみを処理
+                    if (!vertexDeformed[i] && !HasDeformedNeighbor(i, vertexDeformed, adjacency))
+                        continue;
+                    
+                    List<int> neighbors = adjacency[i];
+                    
+                    // 隣接頂点が存在する場合
+                    if (neighbors.Count > 0)
+                    {
+                        Vector3 centroid = Vector3.zero;
+                        
+                        // 隣接頂点の重心を計算
+                        foreach (var neighbor in neighbors)
+                        {
+                            centroid += currentVertices[neighbor];
+                        }
+                        centroid /= neighbors.Count;
+                        
+                        // 形状を維持するラプラシアン平滑化
+                        Vector3 laplacian = centroid - currentVertices[i];
+                        Vector3 newPosition = currentVertices[i] + laplacian * 0.5f;
+                        
+                        // 元の形状に引き戻す力を適用
+                        newPosition = Vector3.Lerp(newPosition, originalVertices[i], lambda);
+                        
+                        // 変形された頂点や強く変形された頂点の隣接頂点は異なる重みで処理
+                        if (vertexDeformed[i])
+                        {
+                            // 貫通修正された頂点は元の形状に引き戻す力を弱める
+                            newPosition = Vector3.Lerp(currentVertices[i], newPosition, 0.7f);
+                        }
+                        else if (HasStronglyDeformedNeighbor(i, vertexDeformed, adjacency, currentVertices, originalVertices))
+                        {
+                            // 大きく変形された頂点に隣接する頂点は、中間的な影響を受ける
+                            newPosition = Vector3.Lerp(currentVertices[i], newPosition, 0.4f);
+                        }
+                        
+                        smoothedVertices[i] = newPosition;
+                    }
+                }
+                
+                // 平滑化された頂点位置を現在の位置に更新
+                System.Array.Copy(smoothedVertices, currentVertices, currentVertices.Length);
+            }
+        }
+        
+        /// <summary>
+        /// 頂点が変形された隣接頂点を持つかどうかをチェック
+        /// </summary>
+        private static bool HasDeformedNeighbor(int vertexIndex, bool[] vertexDeformed, Dictionary<int, List<int>> adjacency)
+        {
+            if (!adjacency.TryGetValue(vertexIndex, out List<int> neighbors))
+                return false;
+            
+            foreach (var neighbor in neighbors)
+            {
+                if (vertexDeformed[neighbor])
+                    return true;
+            }
+            
+            return false;
+        }
+        
+        /// <summary>
+        /// 頂点が大きく変形された隣接頂点を持つかどうかをチェック
+        /// </summary>
+        private static bool HasStronglyDeformedNeighbor(
+            int vertexIndex, 
+            bool[] vertexDeformed, 
+            Dictionary<int, List<int>> adjacency, 
+            Vector3[] currentVertices, 
+            Vector3[] originalVertices)
+        {
+            if (!adjacency.TryGetValue(vertexIndex, out List<int> neighbors))
+                return false;
+            
+            foreach (var neighbor in neighbors)
+            {
+                if (vertexDeformed[neighbor])
+                {
+                    // 変形の大きさをチェック
+                    float deformationMagnitude = Vector3.Distance(currentVertices[neighbor], originalVertices[neighbor]);
+                    if (deformationMagnitude > 0.01f) // 閾値は調整可能
+                        return true;
+                }
+            }
+            
+            return false;
         }
         
         /// <summary>
@@ -400,6 +572,9 @@ namespace VRChatAutoClothingTool
                 
                 // 衣装のローカル座標に戻す
                 clothingVertices[vertexIndex] = clothingWorldToLocal.MultiplyPoint3x4(adjustedWorldVertex);
+                
+                // この頂点が変形されたとマーク
+                vertexChecked[vertexIndex] = true;
                 
                 meshModified = true;
                 adjustedVertices++;
