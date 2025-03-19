@@ -6,6 +6,28 @@ using System.Linq;
 namespace VRChatAutoClothingTool
 {
     /// <summary>
+    /// 貫通検出における情報を保持するクラス
+    /// </summary>
+    public class PenetrationInfo
+    {
+        /// <summary>
+        /// 貫通の深さ（小さいほど大きな貫通）
+        /// </summary>
+        public float Depth { get; set; }
+        
+        /// <summary>
+        /// 押し出す方向（正規化済み）
+        /// </summary>
+        public Vector3 Direction { get; set; }
+        
+        public PenetrationInfo(float depth, Vector3 direction)
+        {
+            Depth = depth;
+            Direction = direction;
+        }
+    }
+
+    /// <summary>
     /// アバターと衣装の貫通検出および調整機能を提供するクラス
     /// </summary>
     public static class PenetrationDetection
@@ -277,3 +299,174 @@ namespace VRChatAutoClothingTool
                         
                         Vector3 a = avatarVertices[avatarTriangles[t]];
                         Vector3 b = avatarVertices[avatarTriangles[t + 1]];
+                        Vector3 c = avatarVertices[avatarTriangles[t + 2]];
+                        
+                        // 三角形の法線を計算
+                        Vector3 triangleNormal = Vector3.Cross(b - a, c - a).normalized;
+                        
+                        // 三角形上の最近点を計算
+                        Vector3 closestPoint = ClosestPointOnTriangle(avatarLocalVertex, a, b, c);
+                        
+                        // 距離を計算
+                        float distance = Vector3.Distance(avatarLocalVertex, closestPoint);
+                        
+                        // 点と三角形の法線方向の内外判定
+                        float dotProduct = Vector3.Dot(avatarLocalVertex - closestPoint, triangleNormal);
+                        
+                        // 貫通を検出（距離が小さく、点が三角形の裏側にある場合）
+                        if (dotProduct < 0 && distance < penetrationThreshold)
+                        {
+                            penetrationDetected = true;
+                            
+                            // ワールド座標に変換した法線方向
+                            Vector3 worldNormal = avatarMatrix.MultiplyVector(triangleNormal).normalized;
+                            
+                            // この頂点の貫通情報リストに追加
+                            if (!vertexPenetrations.TryGetValue(i, out List<PenetrationInfo> penetrations))
+                            {
+                                penetrations = new List<PenetrationInfo>();
+                                vertexPenetrations[i] = penetrations;
+                            }
+                            
+                            // 貫通情報を追加
+                            penetrations.Add(new PenetrationInfo(distance, worldNormal));
+                            
+                            // 大きな貫通が見つかったらループを抜ける（最適化）
+                            if (distance < 0.005f) break;
+                        }
+                    }
+                    
+                    // 大きな貫通が見つかったらメッシュループを抜ける（最適化）
+                    if (penetrationDetected && vertexPenetrations.TryGetValue(i, out var list) && 
+                        list.Any(p => p.Depth < 0.005f)) 
+                        break;
+                }
+                
+                // この頂点はチェック済みとマーク
+                vertexChecked[i] = true;
+            }
+            
+            // 検出された貫通に基づいて頂点を調整
+            foreach (var entry in vertexPenetrations)
+            {
+                int vertexIndex = entry.Key;
+                List<PenetrationInfo> penetrations = entry.Value;
+                
+                if (penetrations.Count == 0) continue;
+                
+                // 最適な調整方向を決定
+                Vector3 adjustmentDirection;
+                float penetrationDepth;
+                
+                if (penetrations.Count == 1)
+                {
+                    // 単一の貫通
+                    adjustmentDirection = penetrations[0].Direction;
+                    penetrationDepth = penetrations[0].Depth;
+                }
+                else
+                {
+                    // 複数の貫通 - 最も浅い方向を優先
+                    var bestPenetration = penetrations.OrderBy(p => p.Depth).First();
+                    adjustmentDirection = bestPenetration.Direction;
+                    penetrationDepth = bestPenetration.Depth;
+                    
+                    // より良い戦略：貫通方向の加重平均
+                    // この場合、深い貫通に大きな重みを付ける
+                    /*
+                    Vector3 weightedDirection = Vector3.zero;
+                    float totalWeight = 0f;
+                    
+                    foreach (var penetration in penetrations)
+                    {
+                        // 深い貫通ほど大きな重みを持つ (inverse)
+                        float weight = 1f / Mathf.Max(0.001f, penetration.Depth);
+                        weightedDirection += penetration.Direction * weight;
+                        totalWeight += weight;
+                    }
+                    
+                    if (totalWeight > 0f)
+                    {
+                        adjustmentDirection = (weightedDirection / totalWeight).normalized;
+                    }
+                    */
+                }
+                
+                // 衣装の頂点をワールド座標に変換
+                Vector3 worldVertex = clothingLocalToWorld.MultiplyPoint3x4(clothingVertices[vertexIndex]);
+                
+                // 法線方向に頂点を押し出す（貫通深度 + 余裕分）
+                Vector3 adjustedWorldVertex = worldVertex + adjustmentDirection * (penetrationDepth + pushOutDistance);
+                
+                // 衣装のローカル座標に戻す
+                clothingVertices[vertexIndex] = clothingWorldToLocal.MultiplyPoint3x4(adjustedWorldVertex);
+                
+                meshModified = true;
+                adjustedVertices++;
+            }
+        }
+        
+        /// <summary>
+        /// 三角形上の最近点を計算
+        /// </summary>
+        private static Vector3 ClosestPointOnTriangle(Vector3 point, Vector3 a, Vector3 b, Vector3 c)
+        {
+            // 点から三角形への最近点を計算
+            Vector3 ab = b - a;
+            Vector3 ac = c - a;
+            Vector3 ap = point - a;
+            
+            float d1 = Vector3.Dot(ab, ap);
+            float d2 = Vector3.Dot(ac, ap);
+            
+            // 点がaの外側にある場合
+            if (d1 <= 0 && d2 <= 0)
+                return a;
+            
+            // 点がbの外側にある場合
+            Vector3 bp = point - b;
+            float d3 = Vector3.Dot(ab, bp);
+            float d4 = Vector3.Dot(ac, bp);
+            if (d3 >= 0 && d4 <= d3)
+                return b;
+            
+            // 点がabエッジの外側にある場合
+            float vc = d1 * d4 - d3 * d2;
+            if (vc <= 0 && d1 >= 0 && d3 <= 0)
+            {
+                float v = d1 / (d1 - d3);
+                return a + v * ab;
+            }
+            
+            // 点がcの外側にある場合
+            Vector3 cp = point - c;
+            float d5 = Vector3.Dot(ab, cp);
+            float d6 = Vector3.Dot(ac, cp);
+            if (d6 >= 0 && d5 <= d6)
+                return c;
+            
+            // 点がacエッジの外側にある場合
+            float vb = d5 * d2 - d1 * d6;
+            if (vb <= 0 && d2 >= 0 && d6 <= 0)
+            {
+                float w = d2 / (d2 - d6);
+                return a + w * ac;
+            }
+            
+            // 点がbcエッジの外側にある場合
+            float va = d3 * d6 - d5 * d4;
+            if (va <= 0 && (d4 - d3) >= 0 && (d5 - d6) >= 0)
+            {
+                float w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+                return b + w * (c - b);
+            }
+            
+            // 三角形内部の点
+            float denom = 1.0f / (va + vb + vc);
+            float v2 = vb * denom;
+            float w2 = vc * denom;
+            
+            return a + ab * v2 + ac * w2;
+        }
+    }
+}
