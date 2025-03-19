@@ -128,6 +128,13 @@ namespace VRChatAutoClothingTool
             "emblem", "badge", "pin", "tassel", "fringe", "trim", "lace", 
             "fur", "feather", "decoration", "ornament", "accessory"
         };
+
+        // 重要なボーン名（常にマッピングに含める）
+        private readonly List<string> criticalBoneNames = new List<string>
+        {
+            "Hand_L", "Hand_R", "Foot_L", "Foot_R", "Toe_L", "Toe_R",
+            "hand_l", "hand_r", "foot_l", "foot_r", "toe_l", "toe_r"
+        };
         
         /// <summary>
         /// 未マッピングボーンとその親ボーンの相対位置・回転・スケールを保存
@@ -182,10 +189,102 @@ namespace VRChatAutoClothingTool
             // 再帰的にボーンを追加（親子関係を考慮）
             AddRecursiveBonesFromAvatar(avatarObject.transform, boneMappings);
             
+            // 重要なボーン（Hand_L/R、Foot_L/R、Toe_L/R等）が含まれているか確認し、なければ追加
+            EnsureCriticalBonesAreMapped(avatarTransforms, clothingTransforms, boneMappings);
+            
             // マッピングされなかった衣装のボーンを処理
             ProcessUnmappedBones(clothingObject, clothingTransforms, boneMappings);
             
             return boneMappings;
+        }
+
+        /// <summary>
+        /// 重要なボーン（Hand、Foot、Toe等）が必ずマッピングに含まれるようにする
+        /// </summary>
+        private void EnsureCriticalBonesAreMapped(Transform[] avatarTransforms, Transform[] clothingTransforms, List<BoneMapping> boneMappings)
+        {
+            // すでにマッピングされているボーン名を抽出
+            HashSet<string> mappedBoneNames = new HashSet<string>(boneMappings.Select(b => b.BoneName.ToLower()));
+            
+            foreach (var criticalBoneName in criticalBoneNames)
+            {
+                string lowerCriticalName = criticalBoneName.ToLower();
+                
+                // すでにマッピングに含まれているかチェック
+                if (mappedBoneNames.Contains(lowerCriticalName))
+                    continue;
+                
+                // アバター側に重要なボーンがあるか検索
+                Transform avatarBone = null;
+                foreach (var transform in avatarTransforms)
+                {
+                    if (transform.name.ToLower() == lowerCriticalName ||
+                        NormalizeBoneName(transform.name).ToLower() == NormalizeBoneName(lowerCriticalName).ToLower())
+                    {
+                        avatarBone = transform;
+                        break;
+                    }
+                }
+                
+                // 該当するボーンがアバターにない場合はスキップ
+                if (avatarBone == null)
+                    continue;
+                
+                // 衣装側に対応するボーンを検索
+                Transform clothingBone = null;
+                foreach (var transform in clothingTransforms)
+                {
+                    if (transform.name.ToLower() == lowerCriticalName ||
+                        NormalizeBoneName(transform.name).ToLower() == NormalizeBoneName(lowerCriticalName).ToLower())
+                    {
+                        clothingBone = transform;
+                        break;
+                    }
+                }
+                
+                // パターンマッチング（より広範囲な検索）
+                if (clothingBone == null)
+                {
+                    // 左側のボーンか右側のボーンかを判断
+                    bool isLeftSide = lowerCriticalName.Contains("_l") || lowerCriticalName.EndsWith("l");
+                    bool isRightSide = lowerCriticalName.Contains("_r") || lowerCriticalName.EndsWith("r");
+                    
+                    // Hand/Foot/Toeのどのタイプかを判断
+                    bool isHand = lowerCriticalName.Contains("hand");
+                    bool isFoot = lowerCriticalName.Contains("foot");
+                    bool isToe = lowerCriticalName.Contains("toe");
+                    
+                    // より広い検索条件で衣装側のボーンを探す
+                    foreach (var transform in clothingTransforms)
+                    {
+                        string lowerName = transform.name.ToLower();
+                        
+                        bool matchesSide = (isLeftSide && (lowerName.Contains("_l") || lowerName.EndsWith("l") || lowerName.Contains("left"))) ||
+                                         (isRightSide && (lowerName.Contains("_r") || lowerName.EndsWith("r") || lowerName.Contains("right")));
+                        
+                        bool matchesType = (isHand && (lowerName.Contains("hand") || lowerName.Contains("wrist"))) ||
+                                         (isFoot && (lowerName.Contains("foot") || lowerName.Contains("ankle"))) ||
+                                         (isToe && (lowerName.Contains("toe") || lowerName.Contains("toes")));
+                        
+                        if (matchesSide && matchesType)
+                        {
+                            clothingBone = transform;
+                            break;
+                        }
+                    }
+                }
+                
+                // マッピングに追加
+                boneMappings.Add(new BoneMapping
+                {
+                    BoneName = criticalBoneName,
+                    AvatarBone = avatarBone,
+                    ClothingBone = clothingBone
+                });
+                
+                // マッピング名のセットに追加
+                mappedBoneNames.Add(lowerCriticalName);
+            }
         }
 
         /// <summary>
@@ -225,6 +324,13 @@ namespace VRChatAutoClothingTool
             if (lowerName.Contains("hand") || lowerName.Contains("foot") || 
                 lowerName.Contains("toe") || lowerName.Contains("finger"))
                 return true;
+                
+            // 重要な特定ボーン名が含まれているか確認
+            foreach (var criticalName in criticalBoneNames)
+            {
+                if (lowerName == criticalName.ToLower())
+                    return true;
+            }
                 
             // 除外するボーン（よくある一般的なメッシュ名など）
             if (lowerName.Contains("mesh") || lowerName.Contains("renderer") || 
@@ -564,8 +670,59 @@ namespace VRChatAutoClothingTool
                 }
             }
             
+            // 5. 特に重要なボーン名に対する特別な処理
+            if (IsCriticalBoneName(avatarBoneName))
+            {
+                // Hand, Foot, Toe などの重要なボーンは広範囲に検索
+                bool isLeft = normalizedAvatarBoneName.Contains("_l") || normalizedAvatarBoneName.EndsWith("l") || 
+                              normalizedAvatarBoneName.Contains("left");
+                bool isRight = normalizedAvatarBoneName.Contains("_r") || normalizedAvatarBoneName.EndsWith("r") || 
+                               normalizedAvatarBoneName.Contains("right");
+                
+                bool isHand = normalizedAvatarBoneName.Contains("hand");
+                bool isFoot = normalizedAvatarBoneName.Contains("foot");
+                bool isToe = normalizedAvatarBoneName.Contains("toe");
+                
+                foreach (var clothingBone in clothingBones)
+                {
+                    string normalizedClothingName = NormalizeBoneName(clothingBone.Key).ToLower();
+                    
+                    // 左右の一致
+                    bool sideMatch = (isLeft && (normalizedClothingName.Contains("_l") || 
+                                              normalizedClothingName.EndsWith("l") || 
+                                              normalizedClothingName.Contains("left"))) ||
+                                   (isRight && (normalizedClothingName.Contains("_r") || 
+                                              normalizedClothingName.EndsWith("r") || 
+                                              normalizedClothingName.Contains("right")));
+                    
+                    // 部位の一致
+                    bool typeMatch = (isHand && (normalizedClothingName.Contains("hand") || 
+                                              normalizedClothingName.Contains("palm") || 
+                                              normalizedClothingName.Contains("wrist"))) ||
+                                   (isFoot && (normalizedClothingName.Contains("foot") || 
+                                              normalizedClothingName.Contains("ankle"))) ||
+                                   (isToe && (normalizedClothingName.Contains("toe") || 
+                                              normalizedClothingName.Contains("toes")));
+                    
+                    if (sideMatch && typeMatch)
+                    {
+                        return clothingBone.Value;
+                    }
+                }
+            }
+            
             // 位置ベースのマッチングを追加（空間的な位置関係で最も近いボーンを見つける）
             return null;
+        }
+        
+        /// <summary>
+        /// 重要なボーン名かどうかをチェック
+        /// </summary>
+        private bool IsCriticalBoneName(string boneName)
+        {
+            string lowerName = boneName.ToLower();
+            return criticalBoneNames.Any(name => lowerName == name.ToLower() || 
+                                               lowerName.Contains(name.ToLower()));
         }
         
         /// <summary>
