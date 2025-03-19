@@ -205,21 +205,74 @@ namespace VRChatAutoClothingTool
         /// </summary>
         private void AdjustBones(List<BoneMapping> boneMappings, Vector3 scaleFactor)
         {
-            foreach (var mapping in boneMappings)
+            // 標準ボーンのマッピングを先に処理
+            var standardBoneMappings = boneMappings.FindAll(m => !IsCustomBone(m.BoneName));
+            foreach (var mapping in standardBoneMappings)
             {
-                if (mapping.AvatarBone != null && mapping.ClothingBone != null)
+                AdjustBone(mapping, scaleFactor);
+            }
+            
+            // 次にカスタムボーン（装飾品など）のマッピングを処理
+            var customBoneMappings = boneMappings.FindAll(m => IsCustomBone(m.BoneName));
+            foreach (var mapping in customBoneMappings)
+            {
+                AdjustBone(mapping, scaleFactor);
+            }
+        }
+
+        /// <summary>
+        /// 個別のボーンを調整
+        /// </summary>
+        private void AdjustBone(BoneMapping mapping, Vector3 scaleFactor)
+        {
+            if (mapping.AvatarBone != null && mapping.ClothingBone != null)
+            {
+                // ボーンの位置と回転を合わせる
+                mapping.ClothingBone.position = mapping.AvatarBone.position;
+                mapping.ClothingBone.rotation = mapping.AvatarBone.rotation;
+                
+                // スケールの調整（オプション）
+                if (mapping.BoneName.Contains("Hips") || mapping.BoneName.Contains("Spine") || mapping.BoneName.Contains("Chest"))
                 {
-                    // ボーンの位置と回転を合わせる
-                    mapping.ClothingBone.position = mapping.AvatarBone.position;
-                    mapping.ClothingBone.rotation = mapping.AvatarBone.rotation;
-                    
-                    // スケールの調整（オプション）
-                    if (mapping.BoneName.Contains("Hips") || mapping.BoneName.Contains("Spine") || mapping.BoneName.Contains("Chest"))
-                    {
-                        mapping.ClothingBone.localScale = Vector3.Scale(mapping.ClothingBone.localScale, scaleFactor);
-                    }
+                    // トランスフォームツリーの異なるパスで同じボーンが参照される可能性があるため、
+                    // ローカルスケールを慎重に調整
+                    mapping.ClothingBone.localScale = new Vector3(
+                        mapping.ClothingBone.localScale.x * scaleFactor.x,
+                        mapping.ClothingBone.localScale.y * scaleFactor.y,
+                        mapping.ClothingBone.localScale.z * scaleFactor.z
+                    );
+                }
+                else if (IsCustomBone(mapping.BoneName))
+                {
+                    // カスタムボーン（装飾品など）の場合は位置合わせのみを行い、スケールは元のまま
+                    // または親ボーンに合わせた微調整を行う
+                    // 必要に応じてここにカスタム処理を追加
                 }
             }
+        }
+        
+        /// <summary>
+        /// 装飾品や非標準ボーンかどうかを判定
+        /// </summary>
+        private bool IsCustomBone(string boneName)
+        {
+            string lowercaseName = boneName.ToLower();
+            string[] decorationKeywords = new string[] 
+            { 
+                "himo", "accessory", "ornament", "ribbon", "string", "rope", 
+                "belt", "strap", "attachment", "decoration", "button",
+                "brooch", "pendant", "badge", "pin", "bangle"
+            };
+            
+            foreach (var keyword in decorationKeywords)
+            {
+                if (lowercaseName.Contains(keyword))
+                {
+                    return true;
+                }
+            }
+            
+            return false;
         }
         
         /// <summary>
@@ -236,9 +289,9 @@ namespace VRChatAutoClothingTool
                     // メッシュを複製して編集可能にする
                     Mesh meshCopy = Object.Instantiate(renderer.sharedMesh);
                     meshCopy.name = renderer.sharedMesh.name + "_Adjusted";
-                    string assetPath = $"Assets/AdjustedMeshes/{clothingObject.name}_{renderer.name}_Adjusted.asset";
                     
                     // アセットフォルダの作成
+                    string assetPath = $"Assets/AdjustedMeshes/{clothingObject.name}_{renderer.name}_Adjusted.asset";
                     string directory = System.IO.Path.GetDirectoryName(assetPath);
                     if (!System.IO.Directory.Exists(directory))
                     {
@@ -251,8 +304,39 @@ namespace VRChatAutoClothingTool
                     
                     // レンダラーにメッシュを適用
                     renderer.sharedMesh = meshCopy;
+                    
+                    // ボーン階層を維持するための処理を追加
+                    UpdateBoneBindings(renderer);
                 }
             }
+        }
+        
+        /// <summary>
+        /// スキンメッシュレンダラーのボーンバインディングを更新
+        /// </summary>
+        private void UpdateBoneBindings(SkinnedMeshRenderer renderer)
+        {
+            if (renderer.sharedMesh == null || renderer.bones == null || renderer.bones.Length == 0)
+                return;
+            
+            // バインドポーズを取得
+            Matrix4x4[] bindPoses = renderer.sharedMesh.bindposes;
+            
+            // 各ボーンの行列を更新
+            for (int i = 0; i < renderer.bones.Length && i < bindPoses.Length; i++)
+            {
+                Transform bone = renderer.bones[i];
+                
+                // ボーンが存在する場合のみ処理
+                if (bone != null)
+                {
+                    // アバターの世界空間からボーンのローカル空間への変換行列を計算
+                    bindPoses[i] = bone.worldToLocalMatrix * renderer.transform.localToWorldMatrix;
+                }
+            }
+            
+            // 更新したバインドポーズを適用
+            renderer.sharedMesh.bindposes = bindPoses;
         }
         
         /// <summary>
@@ -310,7 +394,12 @@ namespace VRChatAutoClothingTool
                         // スケールの調整（オプション）
                         if (mapping.BoneName.Contains("Hips") || mapping.BoneName.Contains("Spine") || mapping.BoneName.Contains("Chest"))
                         {
-                            previewBone.localScale = Vector3.Scale(previewBone.localScale, scaleFactor);
+                            // スケール調整の問題を回避するため、元のスケールを基準に調整
+                            previewBone.localScale = new Vector3(
+                                previewBone.localScale.x * scaleFactor.x,
+                                previewBone.localScale.y * scaleFactor.y,
+                                previewBone.localScale.z * scaleFactor.z
+                            );
                         }
                     }
                 }
