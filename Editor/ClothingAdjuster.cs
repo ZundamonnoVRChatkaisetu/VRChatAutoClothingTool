@@ -114,34 +114,81 @@ namespace VRChatAutoClothingTool
                 var materials = renderer.sharedMaterials;
                 bool materialsChanged = false;
                 
+                // 空のマテリアル配列をチェック
+                if (materials == null || materials.Length == 0)
+                {
+                    Debug.LogWarning($"オブジェクト '{obj.name}' のレンダラー '{renderer.name}' にマテリアルがありません。デフォルトマテリアルを適用します。");
+                    Material defaultMat = new Material(Shader.Find("Standard"));
+                    defaultMat.color = Color.white;
+                    renderer.sharedMaterial = defaultMat;
+                    continue;
+                }
+                
                 for (int i = 0; i < materials.Length; i++)
                 {
                     if (materials[i] != null)
                     {
-                        // 透明度の確認と修正
-                        Color color = materials[i].color;
-                        if (color.a < 0.9f) // 透明度が低い場合
+                        // nullマテリアルでないかチェック
+                        try
                         {
-                            // 新しいマテリアルを作成して不透明に
-                            Material newMat = new Material(materials[i]);
-                            newMat.color = new Color(color.r, color.g, color.b, 1.0f);
-                            
-                            // レンダリングモードを確認して透明設定を解除
-                            if (newMat.HasProperty("_Mode"))
+                            // 透明度の確認と修正
+                            Color color = materials[i].color;
+                            if (color.a < 0.9f) // 透明度が低い場合
                             {
-                                newMat.SetFloat("_Mode", 0); // Opaque
-                                newMat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
-                                newMat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
-                                newMat.SetInt("_ZWrite", 1);
-                                newMat.DisableKeyword("_ALPHATEST_ON");
-                                newMat.DisableKeyword("_ALPHABLEND_ON");
-                                newMat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-                                newMat.renderQueue = -1; // デフォルト
+                                // 新しいマテリアルを作成して不透明に
+                                Material newMat = new Material(materials[i]);
+                                newMat.color = new Color(color.r, color.g, color.b, 1.0f);
+                                
+                                // レンダリングモードを確認して透明設定を解除
+                                if (newMat.HasProperty("_Mode"))
+                                {
+                                    newMat.SetFloat("_Mode", 0); // Opaque
+                                    newMat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
+                                    newMat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
+                                    newMat.SetInt("_ZWrite", 1);
+                                    newMat.DisableKeyword("_ALPHATEST_ON");
+                                    newMat.DisableKeyword("_ALPHABLEND_ON");
+                                    newMat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                                    newMat.renderQueue = -1; // デフォルト
+                                }
+                                
+                                materials[i] = newMat;
+                                materialsChanged = true;
                             }
                             
-                            materials[i] = newMat;
+                            // シェーダーの透明設定を確認
+                            if (materials[i].shader != null && 
+                               (materials[i].shader.name.Contains("Transparent") || 
+                                materials[i].shader.name.Contains("Fade") || 
+                                materials[i].shader.name.Contains("Cutout")))
+                            {
+                                // 透明シェーダーを使用している場合は、Standard不透明シェーダーに変更
+                                Material newMat = new Material(Shader.Find("Standard"));
+                                newMat.color = materials[i].color;
+                                // アルファ値を1に設定
+                                Color newColor = newMat.color;
+                                newColor.a = 1.0f;
+                                newMat.color = newColor;
+                                
+                                materials[i] = newMat;
+                                materialsChanged = true;
+                            }
+                        }
+                        catch (System.Exception e)
+                        {
+                            Debug.LogError($"マテリアル処理中にエラー: {e.Message}");
+                            // エラーが発生した場合はデフォルトマテリアルを使用
+                            materials[i] = new Material(Shader.Find("Standard"));
+                            materials[i].color = Color.white;
                             materialsChanged = true;
                         }
+                    }
+                    else
+                    {
+                        // nullマテリアルを検出した場合はデフォルトマテリアルを使用
+                        materials[i] = new Material(Shader.Find("Standard"));
+                        materials[i].color = Color.white;
+                        materialsChanged = true;
                     }
                 }
                 
@@ -317,28 +364,85 @@ namespace VRChatAutoClothingTool
             foreach (var renderer in renderers)
             {
                 var materials = renderer.sharedMaterials;
+                
+                // 空のマテリアル配列をチェック
+                if (materials == null || materials.Length == 0)
+                {
+                    Material defaultMat = new Material(Shader.Find("Standard"));
+                    defaultMat.color = new Color(1f, 1f, 1f, 0.5f);
+                    defaultMat.SetFloat("_Mode", 3); // Transparent
+                    defaultMat.renderQueue = 3000;
+                    defaultMat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                    defaultMat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                    defaultMat.SetInt("_ZWrite", 0);
+                    defaultMat.DisableKeyword("_ALPHATEST_ON");
+                    defaultMat.EnableKeyword("_ALPHABLEND_ON");
+                    defaultMat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                    
+                    renderer.sharedMaterial = defaultMat;
+                    continue;
+                }
+                
                 for (int i = 0; i < materials.Length; i++)
                 {
-                    // 元のマテリアルを複製
-                    var material = new Material(materials[i]);
-                    
-                    // 半透明設定を適用
-                    material.color = new Color(material.color.r, material.color.g, material.color.b, 0.5f);
-                    if (material.HasProperty("_Mode"))
+                    if (materials[i] != null)
                     {
-                        material.SetFloat("_Mode", 3); // Transparent
+                        try
+                        {
+                            // 元のマテリアルを複製
+                            var material = new Material(materials[i]);
+                            
+                            // 半透明設定を適用
+                            material.color = new Color(material.color.r, material.color.g, material.color.b, 0.5f);
+                            if (material.HasProperty("_Mode"))
+                            {
+                                material.SetFloat("_Mode", 3); // Transparent
+                            }
+                            material.renderQueue = 3000;
+                            
+                            // マテリアルの各種設定
+                            material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                            material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                            material.SetInt("_ZWrite", 0);
+                            material.DisableKeyword("_ALPHATEST_ON");
+                            material.EnableKeyword("_ALPHABLEND_ON");
+                            material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                            
+                            materials[i] = material;
+                        }
+                        catch
+                        {
+                            // エラーが発生した場合は新しいマテリアルを作成
+                            Material defaultMat = new Material(Shader.Find("Standard"));
+                            defaultMat.color = new Color(1f, 1f, 1f, 0.5f);
+                            defaultMat.SetFloat("_Mode", 3); // Transparent
+                            defaultMat.renderQueue = 3000;
+                            defaultMat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                            defaultMat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                            defaultMat.SetInt("_ZWrite", 0);
+                            defaultMat.DisableKeyword("_ALPHATEST_ON");
+                            defaultMat.EnableKeyword("_ALPHABLEND_ON");
+                            defaultMat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                            
+                            materials[i] = defaultMat;
+                        }
                     }
-                    material.renderQueue = 3000;
-                    
-                    // マテリアルの各種設定
-                    material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
-                    material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-                    material.SetInt("_ZWrite", 0);
-                    material.DisableKeyword("_ALPHATEST_ON");
-                    material.EnableKeyword("_ALPHABLEND_ON");
-                    material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-                    
-                    materials[i] = material;
+                    else
+                    {
+                        // nullマテリアルの場合は新しいマテリアルを作成
+                        Material defaultMat = new Material(Shader.Find("Standard"));
+                        defaultMat.color = new Color(1f, 1f, 1f, 0.5f);
+                        defaultMat.SetFloat("_Mode", 3); // Transparent
+                        defaultMat.renderQueue = 3000;
+                        defaultMat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
+                        defaultMat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
+                        defaultMat.SetInt("_ZWrite", 0);
+                        defaultMat.DisableKeyword("_ALPHATEST_ON");
+                        defaultMat.EnableKeyword("_ALPHABLEND_ON");
+                        defaultMat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                        
+                        materials[i] = defaultMat;
+                    }
                 }
                 renderer.sharedMaterials = materials;
             }
