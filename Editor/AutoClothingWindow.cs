@@ -2,10 +2,12 @@ using UnityEngine;
 using UnityEditor;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 
 namespace VRChatAutoClothingTool
 {
+    /// <summary>
+    /// VRChatアバター用の衣装自動調整ウィンドウ
+    /// </summary>
     public class AutoClothingWindow : EditorWindow
     {
         // ウィンドウスクロール位置
@@ -41,6 +43,9 @@ namespace VRChatAutoClothingTool
         private float penetrationPushOutDistance = 0.001f; // デフォルト値を小さくする（0.001f）
         private bool showPenetrationSettings = false;
         private bool enablePenetrationCheck = true; // 貫通チェックの有効/無効を切り替えるフラグ
+        private bool useAdvancedSampling = true; // 高精度サンプリングの使用フラグ
+        private bool preferBodyMeshes = true; // ボディメッシュを優先する
+        private float penetrationThreshold = 0.015f; // 貫通とみなす距離の閾値
         
         // UnityのGUIの更新間隔
         private const float GUI_UPDATE_INTERVAL = 0.1f;
@@ -49,10 +54,32 @@ namespace VRChatAutoClothingTool
         // 微調整の一括アンドゥ用のフラグ
         private bool fineAdjustmentStarted = false;
         
+        // 各機能のハンドラ
+        private BoneStructureAnalyzer boneAnalyzer;
+        private ClothingAdjuster clothingAdjuster;
+        private FineAdjustmentHandler fineAdjustHandler;
+        
         [MenuItem("ずん解/衣装自動調整ツール")]
         public static void ShowWindow()
         {
             GetWindow<AutoClothingWindow>("ずん解 衣装自動調整ツール");
+        }
+        
+        private void OnEnable()
+        {
+            // エディタ更新イベントを登録
+            EditorApplication.update += OnEditorUpdate;
+            
+            // 各機能のハンドラを初期化
+            boneAnalyzer = new BoneStructureAnalyzer();
+            clothingAdjuster = new ClothingAdjuster();
+            fineAdjustHandler = new FineAdjustmentHandler();
+        }
+        
+        private void OnDisable()
+        {
+            // エディタ更新イベントを解除
+            EditorApplication.update -= OnEditorUpdate;
         }
         
         private void OnGUI()
@@ -210,11 +237,20 @@ namespace VRChatAutoClothingTool
                 // 貫通チェックの有効/無効を切り替えるトグル
                 enablePenetrationCheck = EditorGUILayout.Toggle("貫通チェックを有効化", enablePenetrationCheck);
                 
-                // 有効な場合のみ押し出し距離の設定を表示
+                // 有効な場合のみ詳細設定を表示
                 if (enablePenetrationCheck)
                 {
                     EditorGUI.indentLevel++;
+                    
                     penetrationPushOutDistance = EditorGUILayout.Slider("押し出し距離", penetrationPushOutDistance, 0.0001f, 0.01f);
+                    penetrationThreshold = EditorGUILayout.Slider("貫通閾値", penetrationThreshold, 0.001f, 0.03f);
+                    
+                    EditorGUILayout.Space(5);
+                    EditorGUILayout.LabelField("詳細設定", EditorStyles.boldLabel);
+                    
+                    useAdvancedSampling = EditorGUILayout.Toggle("高精度サンプリング", useAdvancedSampling);
+                    preferBodyMeshes = EditorGUILayout.Toggle("ボディメッシュを優先", preferBodyMeshes);
+                    
                     EditorGUI.indentLevel--;
                 }
                 
@@ -245,149 +281,17 @@ namespace VRChatAutoClothingTool
         
         private void DrawFineAdjustmentSection()
         {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-            
-            GUILayout.Label("微調整パネル", EditorStyles.boldLabel);
-            EditorGUILayout.HelpBox("以下のスライダーを使って衣装の位置・回転・サイズを微調整できます。調整はリアルタイムで反映されます。", MessageType.Info);
-            
-            // サイズ調整
-            EditorGUILayout.Space(5);
-            GUILayout.Label("サイズ調整", EditorStyles.boldLabel);
-            
-            EditorGUI.BeginChangeCheck();
-            float newSizeAdjustment = EditorGUILayout.Slider("サイズ倍率", sizeAdjustment, 0.5f, 2.0f);
-            
-            // 位置調整
-            EditorGUILayout.Space(5);
-            GUILayout.Label("位置調整", EditorStyles.boldLabel);
-            Vector3 newPositionAdjustment = new Vector3(
-                EditorGUILayout.Slider("X位置", positionAdjustment.x, -0.5f, 0.5f),
-                EditorGUILayout.Slider("Y位置", positionAdjustment.y, -0.5f, 0.5f),
-                EditorGUILayout.Slider("Z位置", positionAdjustment.z, -0.5f, 0.5f)
+            fineAdjustHandler.DrawFineAdjustmentPanel(
+                clothingObject,
+                avatarObject,
+                ref sizeAdjustment,
+                ref positionAdjustment,
+                ref rotationAdjustment,
+                ref lastSizeAdjustment,
+                ref fineAdjustmentStarted,
+                globalScaleFactor,
+                out statusMessage
             );
-            
-            // 回転調整
-            EditorGUILayout.Space(5);
-            GUILayout.Label("回転調整", EditorStyles.boldLabel);
-            Vector3 newRotationAdjustment = new Vector3(
-                EditorGUILayout.Slider("X回転", rotationAdjustment.x, -180f, 180f),
-                EditorGUILayout.Slider("Y回転", rotationAdjustment.y, -180f, 180f),
-                EditorGUILayout.Slider("Z回転", rotationAdjustment.z, -180f, 180f)
-            );
-            
-            if (EditorGUI.EndChangeCheck())
-            {
-                // 微調整を開始する際に一度だけUndo登録
-                if (!fineAdjustmentStarted && clothingObject != null)
-                {
-                    Undo.RecordObject(clothingObject.transform, "Fine Adjustment");
-                    fineAdjustmentStarted = true;
-                }
-                
-                // 値が変更されたらリアルタイムで衣装を調整
-                bool sizeChanged = sizeAdjustment != newSizeAdjustment;
-                bool positionChanged = positionAdjustment != newPositionAdjustment;
-                bool rotationChanged = rotationAdjustment != newRotationAdjustment;
-                
-                // サイズ値を更新
-                sizeAdjustment = newSizeAdjustment;
-                positionAdjustment = newPositionAdjustment;
-                rotationAdjustment = newRotationAdjustment;
-                
-                UpdateFineAdjustment(sizeChanged, positionChanged, rotationChanged);
-            }
-            
-            EditorGUILayout.Space(10);
-            if (GUILayout.Button("調整をリセット", GUILayout.Height(25)))
-            {
-                ResetFineAdjustment();
-            }
-            
-            if (GUILayout.Button("調整を確定", GUILayout.Height(25)))
-            {
-                FinalizeFineAdjustment();
-            }
-            
-            EditorGUILayout.EndVertical();
-        }
-        
-        private void UpdateFineAdjustment(bool sizeChanged, bool positionChanged, bool rotationChanged)
-        {
-            if (clothingObject == null || avatarObject == null) return;
-            
-            // サイズ調整
-            if (sizeChanged)
-            {
-                // 直接値を設定するように変更（乗算ではなく代入）
-                Vector3 baseScale = Vector3.one * globalScaleFactor;
-                clothingObject.transform.localScale = baseScale * sizeAdjustment;
-                
-                // 現在のサイズ調整値を保存
-                lastSizeAdjustment = sizeAdjustment;
-            }
-            
-            // 位置調整
-            if (positionChanged)
-            {
-                // アバターの位置を基準にして調整
-                clothingObject.transform.position = avatarObject.transform.position + positionAdjustment;
-            }
-            
-            // 回転調整
-            if (rotationChanged)
-            {
-                // アバターの回転を基準にして調整
-                clothingObject.transform.rotation = avatarObject.transform.rotation * Quaternion.Euler(rotationAdjustment);
-            }
-            
-            // シーンビューの更新
-            SceneView.RepaintAll();
-        }
-        
-        private void ResetFineAdjustment()
-        {
-            sizeAdjustment = 1.0f;
-            positionAdjustment = Vector3.zero;
-            rotationAdjustment = Vector3.zero;
-            
-            if (clothingObject != null && avatarObject != null)
-            {
-                // 元の位置・回転・スケールに戻す
-                Undo.RecordObject(clothingObject.transform, "Reset Fine Adjustment");
-                
-                clothingObject.transform.position = avatarObject.transform.position;
-                clothingObject.transform.rotation = avatarObject.transform.rotation;
-                
-                // スケールは直接設定
-                Vector3 baseScale = Vector3.one * globalScaleFactor;
-                clothingObject.transform.localScale = baseScale;
-                
-                // 微調整開始フラグをリセット
-                fineAdjustmentStarted = false;
-                
-                // シーンビューを更新
-                SceneView.RepaintAll();
-            }
-        }
-        
-        private void FinalizeFineAdjustment()
-        {
-            if (clothingObject == null) return;
-            
-            // 調整結果を確定（アンドゥポイントを設定）
-            Undo.RecordObject(clothingObject.transform, "Finalize Fine Adjustment");
-            
-            // 微調整開始フラグをリセット
-            fineAdjustmentStarted = false;
-            
-            // 現在の調整を確定（アセットとして保存するなど）
-            EditorUtility.DisplayDialog("微調整確定", 
-                "現在の微調整設定が確定されました。\n\nサイズ: " + sizeAdjustment + 
-                "\n位置: " + positionAdjustment.ToString("F2") + 
-                "\n回転: " + rotationAdjustment.ToString("F1"), "OK");
-            
-            // 確定後も微調整パネルは表示したままにする
-            statusMessage = "微調整が確定されました。";
         }
         
         private void DrawStatusSection()
@@ -409,151 +313,8 @@ namespace VRChatAutoClothingTool
             statusMessage = "ボーン構造を分析中...";
             isProcessing = true;
             
-            // ボーン構造分析の実装
-            boneMappings.Clear();
-            
-            // アバターのTransformを取得
-            var avatarTransforms = avatarObject.GetComponentsInChildren<Transform>();
-            
-            // 衣装のTransformを取得
-            var clothingTransforms = clothingObject.GetComponentsInChildren<Transform>();
-            
-            // 基本的なボーン名のリスト（VRChatの標準的なボーン名）
-            var commonBoneNames = new List<string>
-            {
-                "Hips", "Spine", "Chest", "UpperChest", "Neck", "Head",
-                "LeftShoulder", "LeftUpperArm", "LeftLowerArm", "LeftHand",
-                "RightShoulder", "RightUpperArm", "RightLowerArm", "RightHand",
-                "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "LeftToes",
-                "RightUpperLeg", "RightLowerLeg", "RightFoot", "RightToes"
-            };
-            
-            // 追加のボーン名パターン
-            var additionalBonePatterns = new List<string>
-            {
-                "UpperLeg.L", "UpperLeg_L",
-                "UpperLeg.R", "UpperLeg_R",
-                "Shoulder.L", "Shoulder_L",
-                "Shoulder.R", "Shoulder_R"
-            };
-            
-            // 追加のボーン名パターンを共通ボーン名リストに追加
-            commonBoneNames.AddRange(additionalBonePatterns);
-            
-            // 指のボーン名を追加
-            var fingerNames = new List<string> { "Thumb", "Index", "Middle", "Ring", "Little" };
-            var jointNames = new List<string> { "Proximal", "Intermediate", "Distal" };
-            
-            foreach (var hand in new[] { "Left", "Right" })
-            {
-                foreach (var finger in fingerNames)
-                {
-                    foreach (var joint in jointNames)
-                    {
-                        commonBoneNames.Add($"{hand}{finger}{joint}");
-                    }
-                }
-            }
-            
-            // アバターのボーンを検索 - パターンマッチングを改良
-            var avatarBones = new Dictionary<string, Transform>();
-            foreach (var boneTransform in avatarTransforms)
-            {
-                var boneName = boneTransform.name;
-                
-                // 正確な名前マッチング
-                if (commonBoneNames.Contains(boneName))
-                {
-                    avatarBones[boneName] = boneTransform;
-                    continue;
-                }
-                
-                // パターンマッチングの改良 - ドット/アンダースコア表記に対応
-                foreach (var pattern in commonBoneNames)
-                {
-                    // "Shoulder.L" と "Shoulder_L" を同等に扱う
-                    string normalizedPattern = pattern.Replace('.', '_').Replace('_', '.');
-                    string normalizedBoneName = boneName.Replace('.', '_').Replace('_', '.');
-                    
-                    if (normalizedBoneName.Contains(normalizedPattern) || 
-                        normalizedPattern.Contains(normalizedBoneName))
-                    {
-                        avatarBones[boneName] = boneTransform;
-                        break;
-                    }
-                }
-            }
-            
-            // 衣装のボーンを検索 - パターンマッチングを改良
-            var clothingBones = new Dictionary<string, Transform>();
-            foreach (var boneTransform in clothingTransforms)
-            {
-                var boneName = boneTransform.name;
-                
-                // 正確な名前マッチング
-                if (commonBoneNames.Contains(boneName))
-                {
-                    clothingBones[boneName] = boneTransform;
-                    continue;
-                }
-                
-                // パターンマッチングの改良
-                foreach (var pattern in commonBoneNames)
-                {
-                    // "Shoulder.L" と "Shoulder_L" を同等に扱う
-                    string normalizedPattern = pattern.Replace('.', '_').Replace('_', '.');
-                    string normalizedBoneName = boneName.Replace('.', '_').Replace('_', '.');
-                    
-                    if (normalizedBoneName.Contains(normalizedPattern) || 
-                        normalizedPattern.Contains(normalizedBoneName))
-                    {
-                        clothingBones[boneName] = boneTransform;
-                        break;
-                    }
-                }
-            }
-            
-            // マッピングリストを作成
-            foreach (var avatarBone in avatarBones)
-            {
-                var boneName = avatarBone.Key;
-                var avatarTransform = avatarBone.Value;
-                
-                // 同じ名前の衣装ボーンを探す
-                Transform clothingTransform = null;
-                
-                // 完全一致を試す
-                if (clothingBones.TryGetValue(boneName, out clothingTransform))
-                {
-                    // 既に見つかった場合は何もしない
-                }
-                else
-                {
-                    // 部分一致または類似パターンを探す
-                    string normalizedBoneName = boneName.Replace('.', '_').Replace('_', '.');
-                    
-                    foreach (var clothingBone in clothingBones)
-                    {
-                        string normalizedClothingName = clothingBone.Key.Replace('.', '_').Replace('_', '.');
-                        
-                        // ドット/アンダースコアの違いを無視して一致するかチェック
-                        if (normalizedClothingName.Contains(normalizedBoneName) || 
-                            normalizedBoneName.Contains(normalizedClothingName))
-                        {
-                            clothingTransform = clothingBone.Value;
-                            break;
-                        }
-                    }
-                }
-                
-                // マッピングを追加
-                boneMappings.Add(new BoneMapping
-                {
-                    BoneName = boneName,
-                    AvatarBone = avatarTransform,
-                    ClothingBone = clothingTransform
-                });
-            }
+            // ボーン構造分析の実行
+            boneMappings = boneAnalyzer.AnalyzeBones(avatarObject, clothingObject);
             
             isProcessing = false;
             statusMessage = $"{boneMappings.Count}個のボーンをマッピングしました。手動でマッピングを調整できます。";
@@ -581,74 +342,18 @@ namespace VRChatAutoClothingTool
             // 調整前の状態を保存
             SaveOriginalClothingState();
             
-            // Undo登録
-            Undo.RegisterFullObjectHierarchyUndo(clothingObject, "Auto Adjust Clothing");
-            
-            // 衣装を一時的にアバターの子オブジェクトにする
-            clothingObject.transform.parent = avatarObject.transform;
-            
-            // グローバルスケールの適用
-            Vector3 scaleFactor = new Vector3(globalScaleFactor, globalScaleFactor, globalScaleFactor);
-            
-            // ルート位置の調整
-            clothingObject.transform.localPosition = Vector3.zero;
-            clothingObject.transform.localRotation = Quaternion.identity;
-            clothingObject.transform.localScale = scaleFactor; // 直接設定
-            
-            // 各ボーンのマッピングに基づいて調整
-            foreach (var mapping in boneMappings)
-            {
-                if (mapping.AvatarBone != null && mapping.ClothingBone != null)
-                {
-                    // ボーンの位置と回転を合わせる
-                    mapping.ClothingBone.position = mapping.AvatarBone.position;
-                    mapping.ClothingBone.rotation = mapping.AvatarBone.rotation;
-                    
-                    // スケールの調整（オプション）
-                    if (mapping.BoneName.Contains("Hips") || mapping.BoneName.Contains("Spine") || mapping.BoneName.Contains("Chest"))
-                    {
-                        mapping.ClothingBone.localScale = Vector3.Scale(mapping.ClothingBone.localScale, scaleFactor);
-                    }
-                }
-            }
-            
-            // 衣装のメッシュレンダラーを取得し、スキンメッシュのバインドポーズを再計算
-            var skinRenderers = clothingObject.GetComponentsInChildren<SkinnedMeshRenderer>();
-            foreach (var renderer in skinRenderers)
-            {
-                if (renderer.sharedMesh != null)
-                {
-                    // メッシュを複製して編集可能にする
-                    Mesh meshCopy = Instantiate(renderer.sharedMesh);
-                    string assetPath = $"Assets/AdjustedMeshes/{clothingObject.name}_{renderer.name}_Adjusted.asset";
-                    
-                    // アセットフォルダの作成
-                    string directory = System.IO.Path.GetDirectoryName(assetPath);
-                    if (!System.IO.Directory.Exists(directory))
-                    {
-                        System.IO.Directory.CreateDirectory(directory);
-                    }
-                    
-                    // メッシュをアセットとして保存
-                    AssetDatabase.CreateAsset(meshCopy, assetPath);
-                    AssetDatabase.SaveAssets();
-                    
-                    // レンダラーにメッシュを適用
-                    renderer.sharedMesh = meshCopy;
-                }
-            }
-            
-            // 貫通チェックが有効な場合のみ処理を実行
-            if (enablePenetrationCheck)
-            {
-                // 衣装とアバターの貫通をチェックして調整
-                MeshUtility.AdjustClothingPenetration(avatarObject, clothingObject, penetrationPushOutDistance);
-            }
-            
-            // 調整完了後に衣装を親から解除
-            clothingObject.transform.parent = null;
-            clothingObject.transform.position = avatarObject.transform.position;
-            clothingObject.transform.rotation = avatarObject.transform.rotation;
+            // 衣装の自動調整を実行
+            bool success = clothingAdjuster.AdjustClothing(
+                avatarObject,
+                clothingObject,
+                boneMappings,
+                globalScaleFactor,
+                enablePenetrationCheck,
+                penetrationPushOutDistance,
+                penetrationThreshold,
+                useAdvancedSampling,
+                preferBodyMeshes
+            );
             
             // 微調整パネルを表示
             showFineAdjustmentPanel = true;
@@ -659,7 +364,9 @@ namespace VRChatAutoClothingTool
             fineAdjustmentStarted = false;
             
             isProcessing = false;
-            statusMessage = "衣装の自動調整が完了しました。必要に応じて微調整パネルで調整してください。";
+            statusMessage = success 
+                ? "衣装の自動調整が完了しました。必要に応じて微調整パネルで調整してください。" 
+                : "衣装の調整中にエラーが発生しました。";
             
             // UIの更新
             Repaint();
@@ -682,100 +389,18 @@ namespace VRChatAutoClothingTool
                 return;
             }
             
-            // プレビュー用の一時的なオブジェクトを作成
-            GameObject previewObject = Instantiate(clothingObject);
-            previewObject.name = clothingObject.name + " (Preview)";
-            
-            // プレビューオブジェクトを一時的にアバターの子オブジェクトにする
-            previewObject.transform.parent = avatarObject.transform;
-            
-            // スケールの適用
-            Vector3 scaleFactor = new Vector3(globalScaleFactor, globalScaleFactor, globalScaleFactor);
-            
-            // ルート位置の調整
-            previewObject.transform.localPosition = Vector3.zero;
-            previewObject.transform.localRotation = Quaternion.identity;
-            previewObject.transform.localScale = scaleFactor; // 直接設定
-            
-            // プレビューオブジェクトのボーンを取得
-            var previewTransforms = previewObject.GetComponentsInChildren<Transform>();
-            
-            // 各ボーンのマッピングに基づいて調整
-            foreach (var mapping in boneMappings)
-            {
-                if (mapping.AvatarBone != null && mapping.ClothingBone != null)
-                {
-                    // プレビューオブジェクトの対応するボーンを検索
-                    var previewBoneName = mapping.ClothingBone.name;
-                    var previewBone = previewTransforms.FirstOrDefault(t => t.name == previewBoneName);
-                    
-                    if (previewBone != null)
-                    {
-                        // ボーンの位置と回転を合わせる
-                        previewBone.position = mapping.AvatarBone.position;
-                        previewBone.rotation = mapping.AvatarBone.rotation;
-                        
-                        // スケールの調整（オプション）
-                        if (mapping.BoneName.Contains("Hips") || mapping.BoneName.Contains("Spine") || mapping.BoneName.Contains("Chest"))
-                        {
-                            previewBone.localScale = Vector3.Scale(previewBone.localScale, scaleFactor);
-                        }
-                    }
-                }
-            }
-            
-            // 貫通チェックが有効な場合のみ処理を実行
-            if (enablePenetrationCheck)
-            {
-                // 貫通チェック
-                MeshUtility.AdjustClothingPenetration(avatarObject, previewObject, penetrationPushOutDistance);
-            }
-            
-            // プレビューオブジェクトに半透明マテリアルを適用
-            var renderers = previewObject.GetComponentsInChildren<Renderer>();
-            foreach (var renderer in renderers)
-            {
-                var materials = renderer.sharedMaterials;
-                for (int i = 0; i < materials.Length; i++)
-                {
-                    // 元のマテリアルを複製
-                    var material = new Material(materials[i]);
-                    
-                    // 半透明設定を適用
-                    material.color = new Color(material.color.r, material.color.g, material.color.b, 0.5f);
-                    if (material.HasProperty("_Mode"))
-                    {
-                        material.SetFloat("_Mode", 3); // Transparent
-                    }
-                    material.renderQueue = 3000;
-                    
-                    // マテリアルの各種設定
-                    material.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.SrcAlpha);
-                    material.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.OneMinusSrcAlpha);
-                    material.SetInt("_ZWrite", 0);
-                    material.DisableKeyword("_ALPHATEST_ON");
-                    material.EnableKeyword("_ALPHABLEND_ON");
-                    material.DisableKeyword("_ALPHAPREMULTIPLY_ON");
-                    
-                    materials[i] = material;
-                }
-                renderer.sharedMaterials = materials;
-            }
-            
-            // 30秒後にプレビューを自動削除するコルーチン
-            EditorApplication.delayCall += () =>
-            {
-                // 30秒後に実行
-                EditorApplication.delayCall += () =>
-                {
-                    if (previewObject != null)
-                    {
-                        DestroyImmediate(previewObject);
-                        statusMessage = "プレビューを終了しました。";
-                        Repaint();
-                    }
-                };
-            };
+            // プレビュー処理の実行
+            clothingAdjuster.PreviewAdjustment(
+                avatarObject,
+                clothingObject,
+                boneMappings,
+                globalScaleFactor,
+                enablePenetrationCheck,
+                penetrationPushOutDistance,
+                penetrationThreshold,
+                useAdvancedSampling,
+                preferBodyMeshes
+            );
             
             statusMessage = "プレビューを表示しています。30秒後に自動的に削除されます。";
             
@@ -783,20 +408,7 @@ namespace VRChatAutoClothingTool
             SceneView.lastActiveSceneView.FrameSelected();
         }
         
-        // エディタイベント処理（微調整のリアルタイム更新用）
-        void OnEnable()
-        {
-            // エディタ更新イベントを登録
-            EditorApplication.update += OnEditorUpdate;
-        }
-        
-        void OnDisable()
-        {
-            // エディタ更新イベントを解除
-            EditorApplication.update -= OnEditorUpdate;
-        }
-        
-        void OnEditorUpdate()
+        private void OnEditorUpdate()
         {
             // エディタの更新時に必要な処理（微調整のリアルタイム反映など）
             if (showFineAdjustmentPanel && clothingObject != null && avatarObject != null)
