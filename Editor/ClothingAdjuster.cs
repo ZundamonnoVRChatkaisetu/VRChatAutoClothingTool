@@ -33,6 +33,9 @@ namespace VRChatAutoClothingTool
                 // Undo登録
                 Undo.RegisterFullObjectHierarchyUndo(clothingObject, "Auto Adjust Clothing");
                 
+                // 元の親を保存
+                Transform originalParent = clothingObject.transform.parent;
+                
                 // 衣装を一時的にアバターの子オブジェクトにする
                 clothingObject.transform.parent = avatarObject.transform;
                 
@@ -66,10 +69,18 @@ namespace VRChatAutoClothingTool
                     );
                 }
                 
-                // 調整完了後に衣装を親から解除
-                clothingObject.transform.parent = null;
-                clothingObject.transform.position = avatarObject.transform.position;
-                clothingObject.transform.rotation = avatarObject.transform.rotation;
+                // 調整完了後に衣装を親から解除（元の親に戻すか、親がなければnull）
+                clothingObject.transform.parent = originalParent;
+                
+                // 親が無い場合は位置をアバターに合わせる
+                if (clothingObject.transform.parent == null)
+                {
+                    clothingObject.transform.position = avatarObject.transform.position;
+                    clothingObject.transform.rotation = avatarObject.transform.rotation;
+                }
+                
+                // すべてのレンダラーが表示されていることを確認
+                EnsureRenderersVisible(clothingObject);
                 
                 return true;
             }
@@ -81,9 +92,64 @@ namespace VRChatAutoClothingTool
                 if (clothingObject != null)
                 {
                     clothingObject.transform.parent = null;
+                    EnsureRenderersVisible(clothingObject);
                 }
                 
                 return false;
+            }
+        }
+        
+        /// <summary>
+        /// レンダラーが表示されていることを確認
+        /// </summary>
+        private void EnsureRenderersVisible(GameObject obj)
+        {
+            var renderers = obj.GetComponentsInChildren<Renderer>(true);
+            foreach (var renderer in renderers)
+            {
+                // レンダラーを有効化
+                renderer.enabled = true;
+                
+                // マテリアルの透明度をチェック
+                var materials = renderer.sharedMaterials;
+                bool materialsChanged = false;
+                
+                for (int i = 0; i < materials.Length; i++)
+                {
+                    if (materials[i] != null)
+                    {
+                        // 透明度の確認と修正
+                        Color color = materials[i].color;
+                        if (color.a < 0.9f) // 透明度が低い場合
+                        {
+                            // 新しいマテリアルを作成して不透明に
+                            Material newMat = new Material(materials[i]);
+                            newMat.color = new Color(color.r, color.g, color.b, 1.0f);
+                            
+                            // レンダリングモードを確認して透明設定を解除
+                            if (newMat.HasProperty("_Mode"))
+                            {
+                                newMat.SetFloat("_Mode", 0); // Opaque
+                                newMat.SetInt("_SrcBlend", (int)UnityEngine.Rendering.BlendMode.One);
+                                newMat.SetInt("_DstBlend", (int)UnityEngine.Rendering.BlendMode.Zero);
+                                newMat.SetInt("_ZWrite", 1);
+                                newMat.DisableKeyword("_ALPHATEST_ON");
+                                newMat.DisableKeyword("_ALPHABLEND_ON");
+                                newMat.DisableKeyword("_ALPHAPREMULTIPLY_ON");
+                                newMat.renderQueue = -1; // デフォルト
+                            }
+                            
+                            materials[i] = newMat;
+                            materialsChanged = true;
+                        }
+                    }
+                }
+                
+                // マテリアルが変更された場合のみ適用
+                if (materialsChanged)
+                {
+                    renderer.sharedMaterials = materials;
+                }
             }
         }
         
@@ -218,6 +284,9 @@ namespace VRChatAutoClothingTool
                     preserveStrength
                 );
             }
+            
+            // すべてのレンダラーが表示されていることを確認
+            EnsureRenderersVisible(previewObject);
             
             // プレビューオブジェクトに半透明マテリアルを適用
             ApplyPreviewMaterials(previewObject);
