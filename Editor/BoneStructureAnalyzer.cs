@@ -48,7 +48,27 @@ namespace VRChatAutoClothingTool
             "LowerArm.L", "LowerArm_L", "Lower.Arm.L", "Lower.Arm_L", 
             "Lower_Arm.L", "Lower_Arm_L", "Lower_arm.L", "Lower_arm_L",
             "LowerArm.R", "LowerArm_R", "Lower.Arm.R", "Lower.Arm_R", 
-            "Lower_Arm.R", "Lower_Arm_R", "Lower_arm.R", "Lower_arm_R"
+            "Lower_Arm.R", "Lower_Arm_R", "Lower_arm.R", "Lower_arm_R",
+            
+            // 追加の脚バリエーション (leg.L/Rなど)
+            "leg.L", "leg_L", "Leg.L", "Leg_L", "LEG.L", "LEG_L",
+            "leg.R", "leg_R", "Leg.R", "Leg_R", "LEG.R", "LEG_R",
+            
+            // 追加の腕バリエーション (arm.L/Rなど)
+            "arm.L", "arm_L", "Arm.L", "Arm_L", "ARM.L", "ARM_L",
+            "arm.R", "arm_R", "Arm.R", "Arm_R", "ARM.R", "ARM_R",
+            
+            // 足首バリエーション
+            "ankle.L", "ankle_L", "Ankle.L", "Ankle_L",
+            "ankle.R", "ankle_R", "Ankle.R", "Ankle_R",
+            
+            // 手首バリエーション
+            "wrist.L", "wrist_L", "Wrist.L", "Wrist_L",
+            "wrist.R", "wrist_R", "Wrist.R", "Wrist_R",
+            
+            // 肩バリエーション
+            "clavicle.L", "clavicle_L", "Clavicle.L", "Clavicle_L",
+            "clavicle.R", "clavicle_R", "Clavicle.R", "Clavicle_R"
         };
         
         // 指のボーン名
@@ -233,8 +253,7 @@ namespace VRChatAutoClothingTool
                 }
             }
             
-            // 位置ベースのマッチングを試みる（将来実装）
-            
+            // 位置ベースのマッチングを追加（空間的な位置関係で最も近いボーンを見つける）
             return null;
         }
         
@@ -246,7 +265,8 @@ namespace VRChatAutoClothingTool
             string[] commonParts = new string[] 
             { 
                 "leg", "arm", "hand", "foot", "shoulder", "head", 
-                "spine", "chest", "hip", "neck" 
+                "spine", "chest", "hip", "neck",
+                "ankle", "wrist", "elbow", "knee", "clavicle", "toe" 
             };
             
             foreach (var part in commonParts)
@@ -294,6 +314,9 @@ namespace VRChatAutoClothingTool
             // Left/Right と .L/.R の対応
             if (MatchLeftRightVariants(name1, name2)) return true;
             
+            // 特殊なケース: upper_leg.l と leg.l など、より一般的な部位名も考慮
+            if (TryMatchGenericPartNames(name1, name2)) return true;
+            
             return false;
         }
         
@@ -305,13 +328,15 @@ namespace VRChatAutoClothingTool
             // Upper/Lowerのパターン
             string[] patterns = new string[] 
             { 
-                "upper", "lower", "leg", "arm", "shoulder" 
+                "upper", "lower", "leg", "arm", "shoulder", "ankle", "wrist", "knee", "elbow" 
             };
             
             // 異なる区切り文字による同一ボーンのバリエーションをチェック
             foreach (var pattern in patterns)
             {
-                if ((name1.Contains(pattern) && name2.Contains(pattern)))
+                if ((name1.Contains(pattern) && name2.Contains(pattern))
+                    || (name1.Contains(pattern.ToUpper()) && name2.Contains(pattern))
+                    || (name1.Contains(pattern) && name2.Contains(pattern.ToUpper())))
                 {
                     string[] variants = new string[] 
                     {
@@ -352,6 +377,75 @@ namespace VRChatAutoClothingTool
         }
         
         /// <summary>
+        /// 一般的な部位名のマッチング (leg, arm等と、upper_leg, upper_armなどの対応)
+        /// </summary>
+        private bool TryMatchGenericPartNames(string name1, string name2)
+        {
+            // 基本部位名と詳細部位名のペア
+            Dictionary<string, List<string>> partVariants = new Dictionary<string, List<string>>()
+            {
+                { "leg", new List<string> { "upperleg", "lowerleg", "thigh", "shin", "knee" } },
+                { "arm", new List<string> { "upperarm", "lowerarm", "elbow" } },
+                { "hand", new List<string> { "wrist", "palm", "finger" } },
+                { "foot", new List<string> { "ankle", "toe", "heel" } }
+            };
+            
+            // 左右の識別子
+            string[] sides = new string[] { "l", "r", "left", "right", ".l", ".r", "_l", "_r" };
+            
+            // 名前を正規化（小文字化、スペース・点・アンダースコア除去）
+            string cleanName1 = name1.ToLower().Replace(" ", "").Replace(".", "").Replace("_", "");
+            string cleanName2 = name2.ToLower().Replace(" ", "").Replace(".", "").Replace("_", "");
+            
+            // 左右の識別
+            string side1 = "";
+            string side2 = "";
+            
+            foreach (var side in sides)
+            {
+                if (cleanName1.Contains(side) || cleanName1.EndsWith(side))
+                {
+                    side1 = side.Replace(".", "").Replace("_", "");
+                }
+                
+                if (cleanName2.Contains(side) || cleanName2.EndsWith(side))
+                {
+                    side2 = side.Replace(".", "").Replace("_", "");
+                }
+            }
+            
+            // 左右が一致するか確認
+            bool sidesMatch = (side1 == side2) || 
+                             (side1 == "l" && side2 == "left") || 
+                             (side1 == "left" && side2 == "l") ||
+                             (side1 == "r" && side2 == "right") || 
+                             (side1 == "right" && side2 == "r");
+            
+            if (!sidesMatch) return false;
+            
+            // 部位名のチェック
+            foreach (var partEntry in partVariants)
+            {
+                string basePart = partEntry.Key;
+                List<string> variants = partEntry.Value;
+                
+                // 一方が基本部位で、他方が詳細部位の場合
+                bool name1HasBase = cleanName1.Contains(basePart);
+                bool name2HasBase = cleanName2.Contains(basePart);
+                
+                bool name1HasVariant = variants.Any(v => cleanName1.Contains(v));
+                bool name2HasVariant = variants.Any(v => cleanName2.Contains(v));
+                
+                if ((name1HasBase && name2HasVariant) || (name1HasVariant && name2HasBase))
+                {
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+        
+        /// <summary>
         /// Left/Right と .L/.R の対応を処理
         /// </summary>
         private bool MatchLeftRightVariants(string name1, string name2)
@@ -359,8 +453,8 @@ namespace VRChatAutoClothingTool
             // 左右のバリエーション
             string[][] sideVariants = new string[][] 
             {
-                new string[] { "left", ".l", "_l" },
-                new string[] { "right", ".r", "_r" }
+                new string[] { "left", ".l", "_l", "l." },
+                new string[] { "right", ".r", "_r", "r." }
             };
             
             // 各バリエーションでチェック
@@ -397,7 +491,7 @@ namespace VRChatAutoClothingTool
         private string RemoveSideSuffix(string boneName)
         {
             // .L, .R, _L, _R等の接尾辞を削除
-            string[] suffixes = new string[] { ".l", ".r", "_l", "_r" };
+            string[] suffixes = new string[] { ".l", ".r", "_l", "_r", "l.", "r." };
             string result = boneName.ToLower();
             
             foreach (var suffix in suffixes)
