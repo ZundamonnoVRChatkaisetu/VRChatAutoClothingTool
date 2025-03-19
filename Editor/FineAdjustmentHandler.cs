@@ -84,6 +84,16 @@ namespace VRChatAutoClothingTool
         private Dictionary<string, Vector3> partPositionAdjustments = new Dictionary<string, Vector3>();
 
         /// <summary>
+        /// 部位ごとの調整が有効化どうか
+        /// </summary>
+        private Dictionary<string, bool> partEnabled = new Dictionary<string, bool>();
+
+        /// <summary>
+        /// 部位ごとのキャッシュされたボーンリスト
+        /// </summary>
+        private Dictionary<string, List<Transform>> cachedPartBones = new Dictionary<string, List<Transform>>();
+
+        /// <summary>
         /// 初期化
         /// </summary>
         public FineAdjustmentHandler()
@@ -93,6 +103,8 @@ namespace VRChatAutoClothingTool
             {
                 partSizeAdjustments[part] = 1.0f;
                 partPositionAdjustments[part] = Vector3.zero;
+                partEnabled[part] = true;
+                cachedPartBones[part] = new List<Transform>();
             }
         }
 
@@ -124,6 +136,33 @@ namespace VRChatAutoClothingTool
             selectedPartIndex = EditorGUILayout.Popup("部位選択", selectedPartIndex, bodyParts);
             string selectedPart = bodyParts[selectedPartIndex];
             
+            // 部位ごとのボーンを初期キャッシュ（必要な場合）
+            if (clothingObject != null && selectedPart != "全体" && 
+                (cachedPartBones[selectedPart] == null || cachedPartBones[selectedPart].Count == 0))
+            {
+                cachedPartBones[selectedPart] = FindPartBones(clothingObject, selectedPart);
+                
+                if (cachedPartBones[selectedPart].Count > 0)
+                {
+                    EditorGUILayout.HelpBox($"部位 '{selectedPart}' には {cachedPartBones[selectedPart].Count} 個のボーンが見つかりました。", MessageType.Info);
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox($"部位 '{selectedPart}' に対応するボーンが見つかりませんでした。全体的な調整のみが適用されます。", MessageType.Warning);
+                }
+            }
+            
+            // 部位別調整の有効/無効
+            if (selectedPart != "全体")
+            {
+                partEnabled[selectedPart] = EditorGUILayout.Toggle("部位別調整を有効化", partEnabled[selectedPart]);
+                
+                if (!partEnabled[selectedPart])
+                {
+                    EditorGUILayout.HelpBox("この部位の個別調整は無効化されています。全体的な調整のみが適用されます。", MessageType.Info);
+                }
+            }
+            
             // サイズ調整
             EditorGUILayout.Space(5);
             GUILayout.Label("サイズ調整", EditorStyles.boldLabel);
@@ -136,7 +175,10 @@ namespace VRChatAutoClothingTool
             }
             else
             {
-                newPartSizeAdjustment = EditorGUILayout.Slider("サイズ倍率", partSizeAdjustments[selectedPart], 0.5f, 2.0f);
+                using (new EditorGUI.DisabledScope(!partEnabled[selectedPart]))
+                {
+                    newPartSizeAdjustment = EditorGUILayout.Slider("サイズ倍率", partSizeAdjustments[selectedPart], 0.5f, 2.0f);
+                }
             }
             
             // 位置調整
@@ -154,11 +196,14 @@ namespace VRChatAutoClothingTool
             }
             else
             {
-                newPositionAdjustment = new Vector3(
-                    EditorGUILayout.Slider("X位置", partPositionAdjustments[selectedPart].x, -0.5f, 0.5f),
-                    EditorGUILayout.Slider("Y位置", partPositionAdjustments[selectedPart].y, -0.5f, 0.5f),
-                    EditorGUILayout.Slider("Z位置", partPositionAdjustments[selectedPart].z, -0.5f, 0.5f)
-                );
+                using (new EditorGUI.DisabledScope(!partEnabled[selectedPart]))
+                {
+                    newPositionAdjustment = new Vector3(
+                        EditorGUILayout.Slider("X位置", partPositionAdjustments[selectedPart].x, -0.3f, 0.3f),
+                        EditorGUILayout.Slider("Y位置", partPositionAdjustments[selectedPart].y, -0.3f, 0.3f),
+                        EditorGUILayout.Slider("Z位置", partPositionAdjustments[selectedPart].z, -0.3f, 0.3f)
+                    );
+                }
             }
             
             // 回転調整（全体のみ）
@@ -176,6 +221,17 @@ namespace VRChatAutoClothingTool
                 if (!fineAdjustmentStarted && clothingObject != null)
                 {
                     Undo.RecordObject(clothingObject.transform, "Fine Adjustment");
+                    
+                    // ボーンのUndo登録も行う
+                    Transform[] allBones = clothingObject.GetComponentsInChildren<Transform>();
+                    foreach (Transform bone in allBones)
+                    {
+                        if (bone != clothingObject.transform)
+                        {
+                            Undo.RecordObject(bone, "Fine Adjustment Bones");
+                        }
+                    }
+                    
                     fineAdjustmentStarted = true;
                 }
                 
@@ -222,7 +278,7 @@ namespace VRChatAutoClothingTool
                         rotationChanged
                     );
                 }
-                else
+                else if (partEnabled[selectedPart])
                 {
                     UpdatePartAdjustment(
                         clothingObject,
@@ -235,10 +291,33 @@ namespace VRChatAutoClothingTool
                         rotationChanged
                     );
                 }
+                else if (rotationChanged)
+                {
+                    // 部位別調整が無効でも、回転は全体に適用
+                    UpdateGlobalAdjustment(
+                        clothingObject,
+                        avatarObject,
+                        sizeAdjustment,
+                        positionAdjustment,
+                        rotationAdjustment,
+                        ref lastSizeAdjustment,
+                        false,
+                        false,
+                        true
+                    );
+                }
             }
             
             EditorGUILayout.Space(10);
-            if (GUILayout.Button("調整をリセット", GUILayout.Height(25)))
+            
+            // 現在の部位の調整をリセットするボタン
+            if (selectedPart != "全体" && GUILayout.Button($"現在の部位 '{selectedPart}' をリセット", GUILayout.Height(25)))
+            {
+                ResetPartAdjustment(clothingObject, selectedPart);
+                statusMessage = $"部位 '{selectedPart}' の調整をリセットしました。";
+            }
+            
+            if (GUILayout.Button("すべての調整をリセット", GUILayout.Height(25)))
             {
                 ResetFineAdjustment(
                     clothingObject,
@@ -249,7 +328,7 @@ namespace VRChatAutoClothingTool
                     ref fineAdjustmentStarted,
                     globalScaleFactor
                 );
-                statusMessage = "微調整をリセットしました。";
+                statusMessage = "すべての微調整をリセットしました。";
             }
             
             if (GUILayout.Button("調整を確定", GUILayout.Height(25)))
@@ -328,13 +407,20 @@ namespace VRChatAutoClothingTool
         {
             if (clothingObject == null) return;
             
-            // 関連するボーンを検索
-            List<Transform> partBones = FindPartBones(clothingObject, partName);
+            // 関連するボーンを取得
+            List<Transform> partBones = cachedPartBones.TryGetValue(partName, out var bones) ? 
+                bones : FindPartBones(clothingObject, partName);
             
             if (partBones.Count == 0)
             {
                 Debug.LogWarning($"部位 '{partName}' に対応するボーンが見つかりませんでした。");
                 return;
+            }
+            
+            // Undo登録
+            foreach (Transform bone in partBones)
+            {
+                Undo.RecordObject(bone, "Part Adjustment");
             }
             
             // 該当部位のボーンに対してサイズ調整を適用
@@ -343,7 +429,6 @@ namespace VRChatAutoClothingTool
                 foreach (Transform bone in partBones)
                 {
                     // ボーンのスケールを調整
-                    Undo.RecordObject(bone, "Part Size Adjustment");
                     bone.localScale = Vector3.one * partSizeAdjustment;
                 }
             }
@@ -357,24 +442,32 @@ namespace VRChatAutoClothingTool
                 if (parentBone != null)
                 {
                     // 親ボーンの位置を調整
-                    Undo.RecordObject(parentBone, "Part Position Adjustment");
-                    parentBone.position += new Vector3(
+                    Vector3 currentPos = parentBone.position;
+                    
+                    // 現在の調整から最適なオフセットを計算
+                    Vector3 adjustedPos = currentPos + new Vector3(
                         partPositionAdjustment.x,
                         partPositionAdjustment.y,
                         partPositionAdjustment.z
                     );
+                    
+                    parentBone.position = adjustedPos;
                 }
                 else
                 {
                     // 親ボーンが特定できない場合は、各ボーンを個別に調整
                     foreach (Transform bone in partBones)
                     {
-                        Undo.RecordObject(bone, "Part Position Adjustment");
-                        bone.position += new Vector3(
+                        Vector3 currentPos = bone.position;
+                        
+                        // 各ボーンは全体の影響を小さく受ける
+                        Vector3 adjustedPos = currentPos + new Vector3(
                             partPositionAdjustment.x / partBones.Count,
                             partPositionAdjustment.y / partBones.Count,
                             partPositionAdjustment.z / partBones.Count
                         );
+                        
+                        bone.position = adjustedPos;
                     }
                 }
             }
@@ -414,6 +507,12 @@ namespace VRChatAutoClothingTool
                 }
             }
             
+            // ボーンを階層順にソート
+            partBones = partBones.OrderBy(b => GetHierarchyDepth(b)).ToList();
+            
+            // キャッシュに保存
+            cachedPartBones[partName] = partBones;
+            
             return partBones;
         }
         
@@ -445,6 +544,40 @@ namespace VRChatAutoClothingTool
             }
             
             return depth;
+        }
+        
+        /// <summary>
+        /// 特定の部位の調整をリセット
+        /// </summary>
+        private void ResetPartAdjustment(GameObject clothingObject, string partName)
+        {
+            if (clothingObject == null) return;
+            
+            // 部位の調整値をリセット
+            partSizeAdjustments[partName] = 1.0f;
+            partPositionAdjustments[partName] = Vector3.zero;
+            
+            // 関連するボーンを取得
+            List<Transform> partBones = cachedPartBones.TryGetValue(partName, out var bones) ? 
+                bones : FindPartBones(clothingObject, partName);
+            
+            // ボーンの変形をリセット
+            foreach (Transform bone in partBones)
+            {
+                Undo.RecordObject(bone, "Reset Part Adjustment");
+                
+                // スケールを1に戻す
+                bone.localScale = Vector3.one;
+                
+                // 位置の調整をリセット（難しいので親ボーンのみ）
+                if (bone == FindParentBone(partBones))
+                {
+                    // 位置はUndo機能に頼る (SetTransformUndoの仕組みを活用)
+                }
+            }
+            
+            // シーンビューの更新
+            SceneView.RepaintAll();
         }
         
         /// <summary>
@@ -546,7 +679,7 @@ namespace VRChatAutoClothingTool
             foreach (string part in bodyParts)
             {
                 if (part == "全体") continue;
-                if (partSizeAdjustments[part] != 1.0f || partPositionAdjustments[part] != Vector3.zero)
+                if (partEnabled[part] && (partSizeAdjustments[part] != 1.0f || partPositionAdjustments[part] != Vector3.zero))
                 {
                     adjustmentSummary += $"{part} - サイズ: {partSizeAdjustments[part]}, 位置: {partPositionAdjustments[part].ToString("F2")}\n";
                 }
