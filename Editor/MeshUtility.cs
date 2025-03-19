@@ -444,7 +444,7 @@ namespace VRChatAutoClothingTool
             return colors;
         }
         
-        // アバターと衣装の貫通をチェックして調整する
+        // アバターと衣装の貫通をチェックして調整する（強化版）
         public static void AdjustClothingPenetration(GameObject avatarObject, GameObject clothingObject, float pushOutDistance = 0.01f)
         {
             if (avatarObject == null || clothingObject == null) return;
@@ -458,15 +458,20 @@ namespace VRChatAutoClothingTool
             if (clothingRenderers.Length == 0) return;
             
             // 衝突判定用のアバターメッシュを生成
-            Mesh avatarCollisionMesh = new Mesh();
-            avatarRenderers[0].BakeMesh(avatarCollisionMesh);
+            List<Mesh> avatarMeshes = new List<Mesh>();
+            List<Matrix4x4> avatarMatrices = new List<Matrix4x4>();
             
-            // アバターのメッシュの三角形データを取得
-            Vector3[] avatarVertices = avatarCollisionMesh.vertices;
-            int[] avatarTriangles = avatarCollisionMesh.triangles;
+            foreach (var renderer in avatarRenderers)
+            {
+                Mesh bakedMesh = new Mesh();
+                renderer.BakeMesh(bakedMesh);
+                avatarMeshes.Add(bakedMesh);
+                avatarMatrices.Add(renderer.transform.localToWorldMatrix);
+            }
             
-            // 世界座標からアバターのローカル座標への変換行列
-            Matrix4x4 avatarWorldToLocal = avatarObject.transform.worldToLocalMatrix;
+            // 貫通チェック結果をログに出力するためのカウンター
+            int totalVertices = 0;
+            int adjustedVertices = 0;
             
             // 各衣装メッシュに対して処理
             foreach (var clothingRenderer in clothingRenderers)
@@ -479,9 +484,11 @@ namespace VRChatAutoClothingTool
                 // 編集可能なメッシュへのコピーを作成
                 Mesh adjustedMesh = Object.Instantiate(clothingMesh);
                 Vector3[] clothingVertices = adjustedMesh.vertices;
+                totalVertices += clothingVertices.Length;
                 
-                // ローカル→ワールド→アバターローカル座標への変換
+                // 衣装のローカル→ワールド変換行列
                 Matrix4x4 clothingLocalToWorld = clothingRenderer.localToWorldMatrix;
+                Matrix4x4 clothingWorldToLocal = clothingLocalToWorld.inverse;
                 
                 bool meshModified = false;
                 
@@ -491,50 +498,76 @@ namespace VRChatAutoClothingTool
                     // 衣装の頂点をワールド座標に変換
                     Vector3 worldVertex = clothingLocalToWorld.MultiplyPoint3x4(clothingVertices[i]);
                     
-                    // アバターのローカル座標に変換
-                    Vector3 avatarLocalVertex = avatarWorldToLocal.MultiplyPoint3x4(worldVertex);
+                    // 各アバターメッシュとの貫通チェック
+                    bool penetrationDetected = false;
+                    Vector3 bestAdjustmentDirection = Vector3.zero;
+                    float minPenetrationDepth = float.MaxValue;
                     
-                    // アバターとの最近距離を計算
-                    float closestDistance = float.MaxValue;
-                    Vector3 closestPoint = Vector3.zero;
-                    Vector3 closestNormal = Vector3.up;
-                    
-                    // アバターの各三角形との距離をチェック
-                    for (int t = 0; t < avatarTriangles.Length; t += 3)
+                    for (int meshIndex = 0; meshIndex < avatarMeshes.Count; meshIndex++)
                     {
-                        Vector3 a = avatarVertices[avatarTriangles[t]];
-                        Vector3 b = avatarVertices[avatarTriangles[t + 1]];
-                        Vector3 c = avatarVertices[avatarTriangles[t + 2]];
+                        Mesh avatarMesh = avatarMeshes[meshIndex];
+                        Matrix4x4 avatarMatrix = avatarMatrices[meshIndex];
+                        Matrix4x4 avatarWorldToLocal = avatarMatrix.inverse;
                         
-                        // 三角形上の最近点を計算
-                        Vector3 point = ClosestPointOnTriangle(avatarLocalVertex, a, b, c);
+                        // アバターのローカル座標に変換
+                        Vector3 avatarLocalVertex = avatarWorldToLocal.MultiplyPoint3x4(worldVertex);
                         
-                        // 距離を計算
-                        float distance = Vector3.Distance(avatarLocalVertex, point);
-                        
-                        // より近い点が見つかった場合、更新
-                        if (distance < closestDistance)
+                        // アバターのバウンディングボックスをチェック
+                        Bounds avatarBounds = avatarMesh.bounds;
+                        if (!avatarBounds.Contains(avatarLocalVertex))
                         {
-                            closestDistance = distance;
-                            closestPoint = point;
+                            continue; // この頂点はアバターの範囲外
+                        }
+                        
+                        // アバターの各三角形との詳細なチェック
+                        Vector3[] avatarVertices = avatarMesh.vertices;
+                        int[] avatarTriangles = avatarMesh.triangles;
+                        
+                        for (int t = 0; t < avatarTriangles.Length; t += 3)
+                        {
+                            Vector3 a = avatarVertices[avatarTriangles[t]];
+                            Vector3 b = avatarVertices[avatarTriangles[t + 1]];
+                            Vector3 c = avatarVertices[avatarTriangles[t + 2]];
                             
                             // 三角形の法線を計算
-                            closestNormal = Vector3.Cross(b - a, c - a).normalized;
+                            Vector3 triangleNormal = Vector3.Cross(b - a, c - a).normalized;
+                            
+                            // 三角形上の最近点を計算
+                            Vector3 closestPoint = ClosestPointOnTriangle(avatarLocalVertex, a, b, c);
+                            
+                            // 距離を計算
+                            float distance = Vector3.Distance(avatarLocalVertex, closestPoint);
+                            
+                            // 点と三角形の法線方向の内外判定
+                            float dotProduct = Vector3.Dot(avatarLocalVertex - closestPoint, triangleNormal);
+                            
+                            // 貫通を検出（距離が小さく、点が三角形の裏側にある場合）
+                            if (dotProduct < 0 && distance < 0.05f)
+                            {
+                                penetrationDetected = true;
+                                
+                                // より浅い貫通の場合、その方向に調整
+                                if (distance < minPenetrationDepth)
+                                {
+                                    minPenetrationDepth = distance;
+                                    // ワールド座標に変換した法線方向
+                                    bestAdjustmentDirection = avatarMatrix.MultiplyVector(triangleNormal).normalized;
+                                }
+                            }
                         }
                     }
                     
-                    // アバター内部に頂点がある場合（距離がマイナスまたは非常に小さい）
-                    float dotProduct = Vector3.Dot(avatarLocalVertex - closestPoint, closestNormal);
-                    if (dotProduct < 0 && closestDistance < 0.05f)
+                    // 貫通が検出された場合、頂点を調整
+                    if (penetrationDetected)
                     {
-                        // 法線方向に頂点を押し出す
-                        Vector3 offsetVertex = avatarLocalVertex + closestNormal * (0.05f + pushOutDistance);
+                        // 法線方向に頂点を押し出す（最小貫通深度 + 余裕分）
+                        Vector3 adjustedWorldVertex = worldVertex + bestAdjustmentDirection * (minPenetrationDepth + pushOutDistance);
                         
-                        // 衣装の座標系に戻す
-                        clothingVertices[i] = clothingLocalToWorld.inverse.MultiplyPoint3x4(
-                            avatarObject.transform.TransformPoint(offsetVertex));
+                        // 衣装のローカル座標に戻す
+                        clothingVertices[i] = clothingWorldToLocal.MultiplyPoint3x4(adjustedWorldVertex);
                         
                         meshModified = true;
+                        adjustedVertices++;
                     }
                 }
                 
@@ -561,8 +594,14 @@ namespace VRChatAutoClothingTool
                 }
             }
             
+            // 処理結果をログに出力
+            Debug.Log($"貫通チェック完了: 合計 {totalVertices} 頂点中 {adjustedVertices} 頂点を調整しました。");
+            
             // 一時メッシュを破棄
-            Object.DestroyImmediate(avatarCollisionMesh);
+            foreach (var mesh in avatarMeshes)
+            {
+                Object.DestroyImmediate(mesh);
+            }
         }
         
         // 三角形上の最近点を計算
@@ -627,13 +666,14 @@ namespace VRChatAutoClothingTool
         }
         
         // 衣装のサイズを微調整
-        public static void AdjustClothingSize(GameObject clothingObject, Vector3 adjustmentFactor)
+        public static void AdjustClothingSize(GameObject clothingObject, float sizeAdjustment)
         {
             if (clothingObject == null) return;
             
             // ルートオブジェクトのスケールを調整
             Transform rootTransform = clothingObject.transform;
-            rootTransform.localScale = Vector3.Scale(rootTransform.localScale, adjustmentFactor);
+            Vector3 originalScale = rootTransform.localScale;
+            rootTransform.localScale = originalScale * sizeAdjustment;
         }
         
         // 衣装の位置を微調整
