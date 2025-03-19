@@ -29,7 +29,7 @@ namespace VRChatAutoClothingTool
         [MenuItem("ずん解/衣装自動調整ツール")]
         public static void ShowWindow()
         {
-            GetWindow<AutoClothingWindow>("VRChat Auto Clothing Tool")]");
+            GetWindow<AutoClothingWindow>("ずん解 衣装自動調整ツール")]");
         }
         
         private void OnGUI()
