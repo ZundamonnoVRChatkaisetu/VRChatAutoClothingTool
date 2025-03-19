@@ -10,6 +10,16 @@ namespace VRChatAutoClothingTool
     public class ClothingAdjuster
     {
         /// <summary>
+        /// リアルタイムプレビューモード
+        /// </summary>
+        private bool isRealTimePreview = false;
+        
+        /// <summary>
+        /// プレビューオブジェクト
+        /// </summary>
+        private GameObject currentPreviewObject = null;
+        
+        /// <summary>
         /// 衣装を自動調整する
         /// </summary>
         public bool AdjustClothing(
@@ -47,8 +57,16 @@ namespace VRChatAutoClothingTool
                 clothingObject.transform.localRotation = Quaternion.identity;
                 clothingObject.transform.localScale = scaleFactor; // 直接設定
                 
+                // BoneStructureAnalyzerのインスタンスを取得
+                var boneAnalyzer = boneMappings.Count > 0 && boneMappings[0] is BoneMapping ? 
+                    (boneMappings[0] as BoneMapping).SourceAnalyzer : 
+                    new BoneStructureAnalyzer();
+                
                 // 各ボーンのマッピングに基づいて調整
                 AdjustBones(boneMappings, scaleFactor);
+                
+                // 未マッピングボーンの処理 (相対位置を維持)
+                AdjustUnmappedBones(boneAnalyzer);
                 
                 // メッシュアセットを作成
                 AdjustMeshes(clothingObject);
@@ -96,6 +114,31 @@ namespace VRChatAutoClothingTool
                 }
                 
                 return false;
+            }
+        }
+        
+        /// <summary>
+        /// 未マッピングボーンを処理（相対位置を維持）
+        /// </summary>
+        private void AdjustUnmappedBones(BoneStructureAnalyzer boneAnalyzer)
+        {
+            foreach (var unmappedInfo in boneAnalyzer.UnmappedBoneInfos)
+            {
+                var info = unmappedInfo.Value;
+                
+                if (info.BoneTransform != null && info.ParentBoneTransform != null)
+                {
+                    // 親ボーンからの相対位置を維持
+                    Vector3 newPosition = info.ParentBoneTransform.TransformPoint(info.RelativePosition);
+                    info.BoneTransform.position = newPosition;
+                    
+                    // 親ボーンからの相対回転を維持
+                    Quaternion newRotation = info.ParentBoneTransform.rotation * info.RelativeRotation;
+                    info.BoneTransform.rotation = newRotation;
+                    
+                    // ローカルスケールを維持
+                    info.BoneTransform.localScale = info.LocalScale;
+                }
             }
         }
         
@@ -206,15 +249,8 @@ namespace VRChatAutoClothingTool
         private void AdjustBones(List<BoneMapping> boneMappings, Vector3 scaleFactor)
         {
             // 標準ボーンのマッピングを先に処理
-            var standardBoneMappings = boneMappings.FindAll(m => !IsCustomBone(m.BoneName));
+            var standardBoneMappings = boneMappings.FindAll(m => !m.IsUnmapped);
             foreach (var mapping in standardBoneMappings)
-            {
-                AdjustBone(mapping, scaleFactor);
-            }
-            
-            // 次にカスタムボーン（装飾品など）のマッピングを処理
-            var customBoneMappings = boneMappings.FindAll(m => IsCustomBone(m.BoneName));
-            foreach (var mapping in customBoneMappings)
             {
                 AdjustBone(mapping, scaleFactor);
             }
@@ -242,12 +278,6 @@ namespace VRChatAutoClothingTool
                         mapping.ClothingBone.localScale.z * scaleFactor.z
                     );
                 }
-                else if (IsCustomBone(mapping.BoneName))
-                {
-                    // カスタムボーン（装飾品など）の場合は位置合わせのみを行い、スケールは元のまま
-                    // または親ボーンに合わせた微調整を行う
-                    // 必要に応じてここにカスタム処理を追加
-                }
             }
         }
         
@@ -256,23 +286,8 @@ namespace VRChatAutoClothingTool
         /// </summary>
         private bool IsCustomBone(string boneName)
         {
-            string lowercaseName = boneName.ToLower();
-            string[] decorationKeywords = new string[] 
-            { 
-                "himo", "accessory", "ornament", "ribbon", "string", "rope", 
-                "belt", "strap", "attachment", "decoration", "button",
-                "brooch", "pendant", "badge", "pin", "bangle"
-            };
-            
-            foreach (var keyword in decorationKeywords)
-            {
-                if (lowercaseName.Contains(keyword))
-                {
-                    return true;
-                }
-            }
-            
-            return false;
+            BoneStructureAnalyzer analyzer = new BoneStructureAnalyzer();
+            return analyzer.IsDecorationBone(boneName);
         }
         
         /// <summary>
@@ -340,6 +355,128 @@ namespace VRChatAutoClothingTool
         }
         
         /// <summary>
+        /// スケーリングのリアルタイムプレビューを開始/更新する
+        /// </summary>
+        public GameObject UpdateScalingPreview(
+            GameObject avatarObject,
+            GameObject clothingObject,
+            List<BoneMapping> boneMappings,
+            float globalScaleFactor)
+        {
+            if (avatarObject == null || clothingObject == null || boneMappings == null)
+                return null;
+                
+            // すでにプレビューオブジェクトが存在する場合は削除
+            if (currentPreviewObject != null)
+            {
+                Object.DestroyImmediate(currentPreviewObject);
+                currentPreviewObject = null;
+            }
+            
+            // プレビュー用の一時的なオブジェクトを作成
+            currentPreviewObject = Object.Instantiate(clothingObject);
+            currentPreviewObject.name = clothingObject.name + " (Preview)";
+            
+            // プレビューオブジェクトを一時的にアバターの子オブジェクトにする
+            currentPreviewObject.transform.parent = avatarObject.transform;
+            
+            // スケールの適用
+            Vector3 scaleFactor = new Vector3(globalScaleFactor, globalScaleFactor, globalScaleFactor);
+            
+            // ルート位置の調整
+            currentPreviewObject.transform.localPosition = Vector3.zero;
+            currentPreviewObject.transform.localRotation = Quaternion.identity;
+            currentPreviewObject.transform.localScale = scaleFactor; // 直接設定
+            
+            // BoneStructureAnalyzerのインスタンスを取得
+            var boneAnalyzer = boneMappings.Count > 0 && boneMappings[0] is BoneMapping ? 
+                (boneMappings[0] as BoneMapping).SourceAnalyzer : 
+                new BoneStructureAnalyzer();
+            
+            // プレビューオブジェクトのボーンを取得
+            var previewTransforms = currentPreviewObject.GetComponentsInChildren<Transform>();
+            
+            // 各ボーンのマッピングに基づいて調整
+            // 実際のボーンではなくプレビューのボーンに適用
+            foreach (var mapping in boneMappings)
+            {
+                if (mapping.AvatarBone != null && mapping.ClothingBone != null && !mapping.IsUnmapped)
+                {
+                    // プレビューオブジェクトの対応するボーンを検索
+                    string boneName = mapping.ClothingBone.name;
+                    Transform previewBone = System.Array.Find(previewTransforms, t => t.name == boneName);
+                    
+                    if (previewBone != null)
+                    {
+                        // ボーンの位置と回転を合わせる
+                        previewBone.position = mapping.AvatarBone.position;
+                        previewBone.rotation = mapping.AvatarBone.rotation;
+                        
+                        // スケールの調整（オプション）
+                        if (mapping.BoneName.Contains("Hips") || mapping.BoneName.Contains("Spine") || mapping.BoneName.Contains("Chest"))
+                        {
+                            previewBone.localScale = new Vector3(
+                                previewBone.localScale.x * scaleFactor.x,
+                                previewBone.localScale.y * scaleFactor.y,
+                                previewBone.localScale.z * scaleFactor.z
+                            );
+                        }
+                    }
+                }
+            }
+            
+            // 未マッピングボーンの処理 - プレビュー用のバージョン
+            foreach (var unmappedInfo in boneAnalyzer.UnmappedBoneInfos)
+            {
+                var info = unmappedInfo.Value;
+                string boneName = info.BoneTransform.name;
+                
+                // プレビューの対応するボーンを見つける
+                Transform previewBone = System.Array.Find(previewTransforms, t => t.name == boneName);
+                
+                if (previewBone != null)
+                {
+                    // 対応する親ボーンをプレビューオブジェクトから見つける
+                    string parentName = info.ParentBoneTransform.name;
+                    Transform previewParent = System.Array.Find(previewTransforms, t => t.name == parentName);
+                    
+                    if (previewParent != null)
+                    {
+                        // 親ボーンからの相対位置を維持
+                        Vector3 newPosition = previewParent.TransformPoint(info.RelativePosition);
+                        previewBone.position = newPosition;
+                        
+                        // 親ボーンからの相対回転を維持
+                        Quaternion newRotation = previewParent.rotation * info.RelativeRotation;
+                        previewBone.rotation = newRotation;
+                        
+                        // ローカルスケールを維持
+                        previewBone.localScale = info.LocalScale;
+                    }
+                }
+            }
+            
+            // プレビューオブジェクトに半透明マテリアルを適用
+            ApplyPreviewMaterials(currentPreviewObject);
+            
+            return currentPreviewObject;
+        }
+        
+        /// <summary>
+        /// プレビューモードを終了する
+        /// </summary>
+        public void EndPreview()
+        {
+            if (currentPreviewObject != null)
+            {
+                Object.DestroyImmediate(currentPreviewObject);
+                currentPreviewObject = null;
+            }
+            
+            isRealTimePreview = false;
+        }
+        
+        /// <summary>
         /// 衣装調整のプレビューを表示
         /// </summary>
         public void PreviewAdjustment(
@@ -359,31 +496,42 @@ namespace VRChatAutoClothingTool
                 return;
 
             // プレビュー用の一時的なオブジェクトを作成
-            GameObject previewObject = Object.Instantiate(clothingObject);
-            previewObject.name = clothingObject.name + " (Preview)";
+            if (currentPreviewObject != null)
+            {
+                Object.DestroyImmediate(currentPreviewObject);
+            }
+            
+            currentPreviewObject = Object.Instantiate(clothingObject);
+            currentPreviewObject.name = clothingObject.name + " (Preview)";
             
             // プレビューオブジェクトを一時的にアバターの子オブジェクトにする
-            previewObject.transform.parent = avatarObject.transform;
+            currentPreviewObject.transform.parent = avatarObject.transform;
             
             // スケールの適用
             Vector3 scaleFactor = new Vector3(globalScaleFactor, globalScaleFactor, globalScaleFactor);
             
             // ルート位置の調整
-            previewObject.transform.localPosition = Vector3.zero;
-            previewObject.transform.localRotation = Quaternion.identity;
-            previewObject.transform.localScale = scaleFactor; // 直接設定
+            currentPreviewObject.transform.localPosition = Vector3.zero;
+            currentPreviewObject.transform.localRotation = Quaternion.identity;
+            currentPreviewObject.transform.localScale = scaleFactor; // 直接設定
+            
+            // BoneStructureAnalyzerのインスタンスを取得
+            var boneAnalyzer = boneMappings.Count > 0 && boneMappings[0] is BoneMapping ? 
+                (boneMappings[0] as BoneMapping).SourceAnalyzer : 
+                new BoneStructureAnalyzer();
             
             // プレビューオブジェクトのボーンを取得
-            var previewTransforms = previewObject.GetComponentsInChildren<Transform>();
+            var previewTransforms = currentPreviewObject.GetComponentsInChildren<Transform>();
             
             // 各ボーンのマッピングに基づいて調整
+            // 標準ボーンを先に処理
             foreach (var mapping in boneMappings)
             {
-                if (mapping.AvatarBone != null && mapping.ClothingBone != null)
+                if (mapping.AvatarBone != null && mapping.ClothingBone != null && !mapping.IsUnmapped)
                 {
                     // プレビューオブジェクトの対応するボーンを検索
-                    var previewBoneName = mapping.ClothingBone.name;
-                    var previewBone = System.Array.Find(previewTransforms, t => t.name == previewBoneName);
+                    string boneName = mapping.ClothingBone.name;
+                    Transform previewBone = System.Array.Find(previewTransforms, t => t.name == boneName);
                     
                     if (previewBone != null)
                     {
@@ -394,7 +542,6 @@ namespace VRChatAutoClothingTool
                         // スケールの調整（オプション）
                         if (mapping.BoneName.Contains("Hips") || mapping.BoneName.Contains("Spine") || mapping.BoneName.Contains("Chest"))
                         {
-                            // スケール調整の問題を回避するため、元のスケールを基準に調整
                             previewBone.localScale = new Vector3(
                                 previewBone.localScale.x * scaleFactor.x,
                                 previewBone.localScale.y * scaleFactor.y,
@@ -405,13 +552,44 @@ namespace VRChatAutoClothingTool
                 }
             }
             
+            // 未マッピングボーンの処理 - プレビュー用のバージョン
+            foreach (var unmappedInfo in boneAnalyzer.UnmappedBoneInfos)
+            {
+                var info = unmappedInfo.Value;
+                string boneName = info.BoneTransform.name;
+                
+                // プレビューの対応するボーンを見つける
+                Transform previewBone = System.Array.Find(previewTransforms, t => t.name == boneName);
+                
+                if (previewBone != null)
+                {
+                    // 対応する親ボーンをプレビューオブジェクトから見つける
+                    string parentName = info.ParentBoneTransform.name;
+                    Transform previewParent = System.Array.Find(previewTransforms, t => t.name == parentName);
+                    
+                    if (previewParent != null)
+                    {
+                        // 親ボーンからの相対位置を維持
+                        Vector3 newPosition = previewParent.TransformPoint(info.RelativePosition);
+                        previewBone.position = newPosition;
+                        
+                        // 親ボーンからの相対回転を維持
+                        Quaternion newRotation = previewParent.rotation * info.RelativeRotation;
+                        previewBone.rotation = newRotation;
+                        
+                        // ローカルスケールを維持
+                        previewBone.localScale = info.LocalScale;
+                    }
+                }
+            }
+            
             // 貫通チェックが有効な場合のみ処理を実行
             if (enablePenetrationCheck)
             {
                 // 貫通チェック
                 PenetrationDetection.AdjustClothingPenetration(
                     avatarObject,
-                    previewObject,
+                    currentPreviewObject,
                     penetrationPushOutDistance,
                     penetrationThreshold,
                     useAdvancedSampling,
@@ -422,10 +600,10 @@ namespace VRChatAutoClothingTool
             }
             
             // すべてのレンダラーが表示されていることを確認
-            EnsureRenderersVisible(previewObject);
+            EnsureRenderersVisible(currentPreviewObject);
             
             // プレビューオブジェクトに半透明マテリアルを適用
-            ApplyPreviewMaterials(previewObject);
+            ApplyPreviewMaterials(currentPreviewObject);
             
             // 30秒後にプレビューを自動削除するコルーチン
             EditorApplication.delayCall += () =>
@@ -433,9 +611,10 @@ namespace VRChatAutoClothingTool
                 // 30秒後に実行
                 EditorApplication.delayCall += () =>
                 {
-                    if (previewObject != null)
+                    if (currentPreviewObject != null && !isRealTimePreview)
                     {
-                        Object.DestroyImmediate(previewObject);
+                        Object.DestroyImmediate(currentPreviewObject);
+                        currentPreviewObject = null;
                     }
                 };
             };
