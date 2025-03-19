@@ -36,8 +36,9 @@ namespace VRChatAutoClothingTool
         private float sizeAdjustment = 1.0f;
         
         // 貫通検出の設定
-        private float penetrationPushOutDistance = 0.01f;
+        private float penetrationPushOutDistance = 0.001f; // デフォルト値を小さくする（0.001f）
         private bool showPenetrationSettings = false;
+        private bool enablePenetrationCheck = true; // 貫通チェックの有効/無効を切り替えるフラグ
         
         // UnityのGUIの更新間隔
         private const float GUI_UPDATE_INTERVAL = 0.1f;
@@ -202,9 +203,18 @@ namespace VRChatAutoClothingTool
             {
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
                 
-                EditorGUILayout.HelpBox("貫通を検出した際に、頂点をどれだけアバターから押し出すかを設定します。", MessageType.Info);
+                EditorGUILayout.HelpBox("衣装がアバターに貫通しないよう調整するための設定です。衣装が変形する場合は無効にするか、値を小さくしてください。", MessageType.Info);
                 
-                penetrationPushOutDistance = EditorGUILayout.Slider("押し出し距離", penetrationPushOutDistance, 0.001f, 0.05f);
+                // 貫通チェックの有効/無効を切り替えるトグル
+                enablePenetrationCheck = EditorGUILayout.Toggle("貫通チェックを有効化", enablePenetrationCheck);
+                
+                // 有効な場合のみ押し出し距離の設定を表示
+                if (enablePenetrationCheck)
+                {
+                    EditorGUI.indentLevel++;
+                    penetrationPushOutDistance = EditorGUILayout.Slider("押し出し距離", penetrationPushOutDistance, 0.0001f, 0.01f);
+                    EditorGUI.indentLevel--;
+                }
                 
                 EditorGUILayout.EndVertical();
             }
@@ -562,8 +572,12 @@ namespace VRChatAutoClothingTool
                 }
             }
             
-            // 衣装とアバターの貫通をチェックして調整
-            MeshUtility.AdjustClothingPenetration(avatarObject, clothingObject, penetrationPushOutDistance);
+            // 貫通チェックが有効な場合のみ処理を実行
+            if (enablePenetrationCheck)
+            {
+                // 衣装とアバターの貫通をチェックして調整
+                MeshUtility.AdjustClothingPenetration(avatarObject, clothingObject, penetrationPushOutDistance);
+            }
             
             // 調整完了後に衣装を親から解除
             clothingObject.transform.parent = null;
@@ -643,8 +657,12 @@ namespace VRChatAutoClothingTool
                 }
             }
             
-            // 貫通チェック
-            MeshUtility.AdjustClothingPenetration(avatarObject, previewObject, penetrationPushOutDistance);
+            // 貫通チェックが有効な場合のみ処理を実行
+            if (enablePenetrationCheck)
+            {
+                // 貫通チェック
+                MeshUtility.AdjustClothingPenetration(avatarObject, previewObject, penetrationPushOutDistance);
+            }
             
             // プレビューオブジェクトに半透明マテリアルを適用
             var renderers = previewObject.GetComponentsInChildren<Renderer>();
