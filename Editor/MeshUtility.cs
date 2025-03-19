@@ -2,6 +2,7 @@ using UnityEngine;
 using UnityEditor;
 using System.Collections.Generic;
 using System.Linq;
+using Unity.Collections;
 
 namespace VRChatAutoClothingTool
 {
@@ -103,8 +104,8 @@ namespace VRChatAutoClothingTool
             if (mesh == null || bones == null || boneIndexMapping == null) return;
             
             // ボーンウェイト情報を取得
-            var bonesPerVertex = mesh.GetBonesPerVertex();
-            var weights = mesh.GetAllBoneWeights();
+            NativeArray<byte> bonesPerVertex = mesh.GetBonesPerVertex();
+            NativeArray<BoneWeight1> weights = mesh.GetAllBoneWeights();
             
             List<BoneWeight1> newWeights = new List<BoneWeight1>();
             int currentWeightIndex = 0;
@@ -147,7 +148,20 @@ namespace VRChatAutoClothingTool
             }
             
             // 新しいボーンウェイトをメッシュに設定
-            mesh.SetBoneWeights(bonesPerVertex, newWeights.ToArray());
+            var newBonesPerVertex = bonesPerVertex;
+            var nativeWeights = new NativeArray<BoneWeight1>(newWeights.ToArray(), Allocator.Temp);
+            mesh.SetBoneWeights(newBonesPerVertex, nativeWeights);
+            nativeWeights.Dispose();
+            
+            // NativeArrayのリソースを解放
+            if (weights.IsCreated)
+            {
+                weights.Dispose();
+            }
+            if (bonesPerVertex.IsCreated)
+            {
+                bonesPerVertex.Dispose();
+            }
         }
         
         // バインドポーズを再計算
@@ -390,8 +404,8 @@ namespace VRChatAutoClothingTool
             Color[] colors = new Color[vertices.Length];
             
             // ボーンウェイト情報を取得
-            var bonesPerVertex = mesh.GetBonesPerVertex();
-            var weights = mesh.GetAllBoneWeights();
+            NativeArray<byte> bonesPerVertex = mesh.GetBonesPerVertex();
+            NativeArray<BoneWeight1> weights = mesh.GetAllBoneWeights();
             int weightIndex = 0;
             
             for (int i = 0; i < vertices.Length; i++)
@@ -415,6 +429,16 @@ namespace VRChatAutoClothingTool
                 colors[i] = new Color(weight, 0f, 1f - weight, 1f);
                 
                 weightIndex += boneCount;
+            }
+            
+            // NativeArrayのリソース解放
+            if (weights.IsCreated)
+            {
+                weights.Dispose();
+            }
+            if (bonesPerVertex.IsCreated)
+            {
+                bonesPerVertex.Dispose();
             }
             
             return colors;
