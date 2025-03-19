@@ -43,6 +43,9 @@ namespace VRChatAutoClothingTool
         private const float GUI_UPDATE_INTERVAL = 0.1f;
         private float lastUpdateTime = 0f;
         
+        // 微調整の一括アンドゥ用のフラグ
+        private bool fineAdjustmentStarted = false;
+        
         [MenuItem("ずん解/衣装自動調整ツール")]
         public static void ShowWindow()
         {
@@ -262,6 +265,13 @@ namespace VRChatAutoClothingTool
             
             if (EditorGUI.EndChangeCheck())
             {
+                // 微調整を開始する際に一度だけUndo登録
+                if (!fineAdjustmentStarted && clothingObject != null)
+                {
+                    Undo.RecordObject(clothingObject.transform, "Fine Adjustment");
+                    fineAdjustmentStarted = true;
+                }
+                
                 // 値が変更されたらリアルタイムで衣装を調整
                 bool sizeChanged = sizeAdjustment != newSizeAdjustment;
                 bool positionChanged = positionAdjustment != newPositionAdjustment;
@@ -292,34 +302,24 @@ namespace VRChatAutoClothingTool
         {
             if (clothingObject == null || avatarObject == null) return;
             
-            // 一時的にUndo登録を無効にするとエディタのパフォーマンスが向上する
-            Undo.DisableUndoRegistration();
-            
-            try
+            // サイズ調整
+            if (sizeChanged)
             {
-                // サイズ調整
-                if (sizeChanged)
-                {
-                    MeshUtility.AdjustClothingSize(clothingObject, sizeAdjustment);
-                }
-                
-                // 位置調整
-                if (positionChanged)
-                {
-                    // アバターの位置を基準にして調整
-                    clothingObject.transform.position = avatarObject.transform.position + positionAdjustment;
-                }
-                
-                // 回転調整
-                if (rotationChanged)
-                {
-                    // アバターの回転を基準にして調整
-                    clothingObject.transform.rotation = avatarObject.transform.rotation * Quaternion.Euler(rotationAdjustment);
-                }
+                MeshUtility.AdjustClothingSize(clothingObject, sizeAdjustment);
             }
-            finally
+            
+            // 位置調整
+            if (positionChanged)
             {
-                Undo.EnableUndoRegistration();
+                // アバターの位置を基準にして調整
+                clothingObject.transform.position = avatarObject.transform.position + positionAdjustment;
+            }
+            
+            // 回転調整
+            if (rotationChanged)
+            {
+                // アバターの回転を基準にして調整
+                clothingObject.transform.rotation = avatarObject.transform.rotation * Quaternion.Euler(rotationAdjustment);
             }
             
             // シーンビューの更新
@@ -345,6 +345,9 @@ namespace VRChatAutoClothingTool
                 clothingObject.transform.localScale = Vector3.one;
                 clothingObject.transform.localScale = Vector3.Scale(clothingObject.transform.localScale, scaleFactor);
                 
+                // 微調整開始フラグをリセット
+                fineAdjustmentStarted = false;
+                
                 // シーンビューを更新
                 SceneView.RepaintAll();
             }
@@ -353,6 +356,12 @@ namespace VRChatAutoClothingTool
         private void FinalizeFineAdjustment()
         {
             if (clothingObject == null) return;
+            
+            // 調整結果を確定（アンドゥポイントを設定）
+            Undo.RecordObject(clothingObject.transform, "Finalize Fine Adjustment");
+            
+            // 微調整開始フラグをリセット
+            fineAdjustmentStarted = false;
             
             // 現在の調整を確定（アセットとして保存するなど）
             EditorUtility.DisplayDialog("微調整確定", 
@@ -566,6 +575,7 @@ namespace VRChatAutoClothingTool
             sizeAdjustment = 1.0f;
             positionAdjustment = Vector3.zero;
             rotationAdjustment = Vector3.zero;
+            fineAdjustmentStarted = false;
             
             isProcessing = false;
             statusMessage = "衣装の自動調整が完了しました。必要に応じて微調整パネルで調整してください。";
