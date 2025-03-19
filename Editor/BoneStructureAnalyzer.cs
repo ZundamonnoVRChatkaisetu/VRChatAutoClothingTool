@@ -16,7 +16,14 @@ namespace VRChatAutoClothingTool
             "LeftShoulder", "LeftUpperArm", "LeftLowerArm", "LeftHand",
             "RightShoulder", "RightUpperArm", "RightLowerArm", "RightHand",
             "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "LeftToes",
-            "RightUpperLeg", "RightLowerLeg", "RightFoot", "RightToes"
+            "RightUpperLeg", "RightLowerLeg", "RightFoot", "RightToes",
+            // 新しく追加：手足の詳細なボーン
+            "Foot_L", "Foot_R", "Hand_L", "Hand_R", "Toe_L", "Toe_R",
+            // Breast/乳房ボーンも追加
+            "Breast_L", "Breast_R",
+            // 特殊ボーンも追加
+            "WingRoot", "TailRoot", "W_ArmCoverTag_L", "W_ArmCoverTag_R",
+            "XC_WristTwist_L", "XC_WristTwist_R", "XC_ArmTwist_L", "XC_ArmTwist_R"
         };
         
         // 追加のボーン名パターン (ドット形式とアンダースコア形式両方) - 拡張版
@@ -85,7 +92,23 @@ namespace VRChatAutoClothingTool
             "Accessory_L", "Accessory_R", "Ornament_L", "Ornament_R", "Himo_L", "Himo_R",
             "Ribbon_L", "Ribbon_R", "String_L", "String_R", "Rope_L", "Rope_R", "Belt_L", "Belt_R",
             "ShirtRibbon", "Tie", "Scarf", "Chain", "Necklace", "Collar", "Button", "Bow", "Brooch",
-            "Emblem", "Badge", "Pin", "Tassel", "Fringe", "Trim", "Lace", "Fur", "Feather", "Attachment"
+            "Emblem", "Badge", "Pin", "Tassel", "Fringe", "Trim", "Lace", "Fur", "Feather", "Attachment",
+            
+            // 新しく追加：手と足のバリエーション
+            "Hand.L", "Hand.R", "Hand_L", "Hand_R", "hand.L", "hand.R", "hand_L", "hand_R",
+            "Foot.L", "Foot.R", "Foot_L", "Foot_R", "foot.L", "foot.R", "foot_L", "foot_R",
+            "Toe.L", "Toe.R", "Toe_L", "Toe_R", "toe.L", "toe.R", "toe_L", "toe_R",
+            "Toes.L", "Toes.R", "Toes_L", "Toes_R", "toes.L", "toes.R", "toes_L", "toes_R",
+            
+            // 新しく追加：特殊ボーン
+            "WingRoot", "TailRoot", "Wing", "Tail", "W_ArmCoverTag_L", "W_ArmCoverTag_R",
+            "XC_WristTwist_L", "XC_WristTwist_R", "XC_ArmTwist_L", "XC_ArmTwist_R",
+            
+            // 新しく追加：指ボーン
+            "Thumb_L", "Thumb_R", "Index_L", "Index_R", "Middle_L", "Middle_R", 
+            "Ring_L", "Ring_R", "Little_L", "Little_R",
+            "Finger1_L", "Finger1_R", "Finger2_L", "Finger2_R", "Finger3_L", "Finger3_R",
+            "Finger4_L", "Finger4_R", "Finger5_L", "Finger5_R"
         };
         
         // 指のボーン名
@@ -156,10 +179,59 @@ namespace VRChatAutoClothingTool
                 });
             }
             
+            // 再帰的にボーンを追加（親子関係を考慮）
+            AddRecursiveBonesFromAvatar(avatarObject.transform, boneMappings);
+            
             // マッピングされなかった衣装のボーンを処理
             ProcessUnmappedBones(clothingObject, clothingTransforms, boneMappings);
             
             return boneMappings;
+        }
+
+        /// <summary>
+        /// 再帰的にアバターのボーンを検索して追加
+        /// </summary>
+        private void AddRecursiveBonesFromAvatar(Transform currentBone, List<BoneMapping> boneMappings)
+        {
+            // このボーンが既にマッピングリストに含まれているか確認
+            bool alreadyMapped = boneMappings.Any(m => m.AvatarBone == currentBone);
+            
+            // まだマッピングされていない重要なボーンの場合、追加
+            if (!alreadyMapped && IsImportantBone(currentBone.name))
+            {
+                boneMappings.Add(new BoneMapping
+                {
+                    BoneName = currentBone.name,
+                    AvatarBone = currentBone,
+                    ClothingBone = null // マッチングは後で行う
+                });
+            }
+            
+            // 子ボーンに対して再帰的に適用
+            foreach (Transform child in currentBone)
+            {
+                AddRecursiveBonesFromAvatar(child, boneMappings);
+            }
+        }
+        
+        /// <summary>
+        /// 重要なボーンかどうかを判定
+        /// </summary>
+        private bool IsImportantBone(string boneName)
+        {
+            string lowerName = boneName.ToLower();
+            
+            // 手足の重要部位
+            if (lowerName.Contains("hand") || lowerName.Contains("foot") || 
+                lowerName.Contains("toe") || lowerName.Contains("finger"))
+                return true;
+                
+            // 除外するボーン（よくある一般的なメッシュ名など）
+            if (lowerName.Contains("mesh") || lowerName.Contains("renderer") || 
+                lowerName.Contains("collider") || lowerName.Contains("camera"))
+                return false;
+                
+            return false;
         }
 
         /// <summary>
@@ -454,6 +526,44 @@ namespace VRChatAutoClothingTool
                 }
             }
             
+            // 4. 特殊ケース：手足の部位
+            if (normalizedAvatarBoneName.Contains("foot") || normalizedAvatarBoneName.Contains("toe"))
+            {
+                // 足のボーンに対してより積極的なマッチング
+                foreach (var clothingBone in clothingBones)
+                {
+                    string normalizedClothingName = NormalizeBoneName(clothingBone.Key).ToLower();
+                    
+                    if (normalizedClothingName.Contains("foot") || normalizedClothingName.Contains("toe") ||
+                        normalizedClothingName.Contains("ankle"))
+                    {
+                        // 左右の一致も確認
+                        if (ExtractBoneSide(normalizedAvatarBoneName) == ExtractBoneSide(normalizedClothingName))
+                        {
+                            return clothingBone.Value;
+                        }
+                    }
+                }
+            }
+            else if (normalizedAvatarBoneName.Contains("hand") || normalizedAvatarBoneName.Contains("finger"))
+            {
+                // 手のボーンに対してより積極的なマッチング
+                foreach (var clothingBone in clothingBones)
+                {
+                    string normalizedClothingName = NormalizeBoneName(clothingBone.Key).ToLower();
+                    
+                    if (normalizedClothingName.Contains("hand") || normalizedClothingName.Contains("finger") ||
+                        normalizedClothingName.Contains("wrist"))
+                    {
+                        // 左右の一致も確認
+                        if (ExtractBoneSide(normalizedAvatarBoneName) == ExtractBoneSide(normalizedClothingName))
+                        {
+                            return clothingBone.Value;
+                        }
+                    }
+                }
+            }
+            
             // 位置ベースのマッチングを追加（空間的な位置関係で最も近いボーンを見つける）
             return null;
         }
@@ -552,7 +662,7 @@ namespace VRChatAutoClothingTool
             }
             
             // 拡張: Upper_Leg.R と UpperLeg.R の特殊ケース対応
-            string[] specialParts = new string[] { "leg", "arm" };
+            string[] specialParts = new string[] { "leg", "arm", "foot", "hand", "toe" };
             foreach (var part in specialParts)
             {
                 string pattern1 = "upper_" + part;
@@ -564,6 +674,18 @@ namespace VRChatAutoClothingTool
                     // UpperLeg_R と Upper_Leg_R のようなパターンを優先的にマッチング
                     score += 3.0f;
                 }
+            }
+            
+            // 追加: 手足特殊ケース
+            if ((name1.Contains("foot") && name2.Contains("foot")) || 
+                (name1.Contains("toe") && name2.Contains("toe")))
+            {
+                score += 2.5f;
+            }
+            if ((name1.Contains("hand") && name2.Contains("hand")) || 
+                (name1.Contains("finger") && name2.Contains("finger")))
+            {
+                score += 2.5f;
             }
             
             return score;
@@ -640,7 +762,7 @@ namespace VRChatAutoClothingTool
             // Upper/Lowerのパターン
             string[] patterns = new string[] 
             { 
-                "upper", "lower", "leg", "arm", "shoulder", "ankle", "wrist", "knee", "elbow" 
+                "upper", "lower", "leg", "arm", "shoulder", "ankle", "wrist", "knee", "elbow", "hand", "foot", "toe"
             };
             
             // 異なる区切り文字による同一ボーンのバリエーションをチェック
@@ -698,8 +820,8 @@ namespace VRChatAutoClothingTool
             {
                 { "leg", new List<string> { "upperleg", "lowerleg", "thigh", "shin", "knee" } },
                 { "arm", new List<string> { "upperarm", "lowerarm", "elbow" } },
-                { "hand", new List<string> { "wrist", "palm", "finger" } },
-                { "foot", new List<string> { "ankle", "toe", "heel" } }
+                { "hand", new List<string> { "wrist", "palm", "finger", "thumb", "index", "middle", "ring", "little" } },
+                { "foot", new List<string> { "ankle", "toe", "heel", "toes" } }
             };
             
             // 左右の識別子
