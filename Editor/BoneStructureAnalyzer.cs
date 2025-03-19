@@ -83,7 +83,9 @@ namespace VRChatAutoClothingTool
             // 追加:装飾品、アクセサリ、紐などのマッピング対応
             "Accessory", "Ornament", "Himo", "Ribbon", "String", "Rope", "Belt", "Strap", "Attachment",
             "Accessory_L", "Accessory_R", "Ornament_L", "Ornament_R", "Himo_L", "Himo_R",
-            "Ribbon_L", "Ribbon_R", "String_L", "String_R", "Rope_L", "Rope_R", "Belt_L", "Belt_R"
+            "Ribbon_L", "Ribbon_R", "String_L", "String_R", "Rope_L", "Rope_R", "Belt_L", "Belt_R",
+            "ShirtRibbon", "Tie", "Scarf", "Chain", "Necklace", "Collar", "Button", "Bow", "Brooch",
+            "Emblem", "Badge", "Pin", "Tassel", "Fringe", "Trim", "Lace", "Fur", "Feather", "Attachment"
         };
         
         // 指のボーン名
@@ -92,6 +94,22 @@ namespace VRChatAutoClothingTool
         
         // 各ハンドサイド
         private readonly string[] handSides = new string[] { "Left", "Right" };
+
+        // 装飾ボーンのキーワード
+        private readonly string[] decorationKeywords = new string[] 
+        { 
+            "himo", "accessory", "ornament", "ribbon", "string", "rope", 
+            "belt", "strap", "attachment", "decoration", "button",
+            "brooch", "pendant", "badge", "pin", "bangle", "shirtrrbbon",
+            "tie", "scarf", "chain", "necklace", "collar", "bow",
+            "emblem", "badge", "pin", "tassel", "fringe", "trim", "lace", 
+            "fur", "feather", "decoration", "ornament", "accessory"
+        };
+        
+        /// <summary>
+        /// 未マッピングボーンとその親ボーンの相対位置・回転・スケールを保存
+        /// </summary>
+        public Dictionary<string, UnmappedBoneInfo> UnmappedBoneInfos { get; private set; } = new Dictionary<string, UnmappedBoneInfo>();
         
         /// <summary>
         /// アバターと衣装のボーン構造を分析し、マッピングリストを生成する
@@ -138,119 +156,129 @@ namespace VRChatAutoClothingTool
                 });
             }
             
-            // カスタムボーン処理 - 標準ボーンに含まれないが重要な衣装のボーンを追加
-            AddCustomBoneMappings(avatarObject, clothingObject, clothingTransforms, boneMappings);
+            // マッピングされなかった衣装のボーンを処理
+            ProcessUnmappedBones(clothingObject, clothingTransforms, boneMappings);
             
             return boneMappings;
         }
-        
+
         /// <summary>
-        /// カスタムボーンマッピングを追加（非標準ボーンの処理）
+        /// マッピングされなかった衣装のボーンを処理
         /// </summary>
-        private void AddCustomBoneMappings(
-            GameObject avatarObject, 
+        private void ProcessUnmappedBones(
             GameObject clothingObject, 
             Transform[] clothingTransforms, 
             List<BoneMapping> boneMappings)
         {
-            // 既にマッピングされているボーンのリスト
-            var mappedBones = new HashSet<Transform>(boneMappings
+            // 既にマッピングされたボーンのリスト
+            var mappedBonesSet = new HashSet<Transform>(
+                boneMappings
                 .Where(m => m.ClothingBone != null)
-                .Select(m => m.ClothingBone));
+                .Select(m => m.ClothingBone)
+            );
             
-            // マッピングされていない衣装のボーンを検出
-            foreach (var clothingTransform in clothingTransforms)
+            // マッピングされていないボーンを検出
+            var unmappedBones = new List<Transform>();
+            foreach (var transform in clothingTransforms)
             {
-                // ルート、親がルートのボーン、既にマッピングしたボーンはスキップ
-                if (clothingTransform == clothingObject.transform || 
-                    clothingTransform.parent == clothingObject.transform ||
-                    mappedBones.Contains(clothingTransform))
+                // ルートオブジェクト自体または直接の子はスキップ
+                if (transform == clothingObject.transform || 
+                    transform.parent == clothingObject.transform)
                 {
                     continue;
                 }
                 
-                // カスタムボーンかどうかを判定（Himo_L、Himo_Rなど特殊アイテムのボーン）
-                bool isCustomBone = IsCustomDecorationBone(clothingTransform.name);
-                if (isCustomBone)
+                // すでにマッピングされているボーンはスキップ
+                if (mappedBonesSet.Contains(transform))
                 {
-                    // 最も近い親ボーンを探す
-                    Transform parentBone = FindNearestMappedParent(clothingTransform, mappedBones);
-                    
-                    if (parentBone != null)
+                    continue;
+                }
+                
+                // 明らかにボーンではないもの（MeshRenderer等を持つもの）はスキップ
+                if (transform.GetComponent<MeshRenderer>() != null || 
+                    transform.GetComponent<SkinnedMeshRenderer>() != null)
+                {
+                    continue;
+                }
+                
+                // 未マッピングボーンとして追加
+                unmappedBones.Add(transform);
+            }
+            
+            // 各未マッピングボーンの親ボーンとの相対位置を記録
+            UnmappedBoneInfos.Clear();
+            foreach (var unmappedBone in unmappedBones)
+            {
+                // 親を遡って最初にマッピングされているボーンを見つける
+                Transform currentParent = unmappedBone.parent;
+                Transform mappedParent = null;
+                
+                while (currentParent != null)
+                {
+                    if (mappedBonesSet.Contains(currentParent))
                     {
-                        // 親ボーンに対応するアバターのボーンを見つける
-                        var parentMapping = boneMappings.FirstOrDefault(m => m.ClothingBone == parentBone);
-                        if (parentMapping != null && parentMapping.AvatarBone != null)
-                        {
-                            // カスタムボーン用のマッピングを追加
-                            boneMappings.Add(new BoneMapping
-                            {
-                                BoneName = clothingTransform.name,
-                                AvatarBone = parentMapping.AvatarBone, // 親ボーンと同じアバターボーンを参照
-                                ClothingBone = clothingTransform
-                            });
-                            
-                            // マッピング済みリストに追加
-                            mappedBones.Add(clothingTransform);
-                        }
+                        mappedParent = currentParent;
+                        break;
+                    }
+                    
+                    // 親を遡る
+                    if (currentParent.parent != null)
+                    {
+                        currentParent = currentParent.parent;
                     }
                     else
                     {
-                        // 親が見つからない場合はChestボーンを探す
-                        var chestBone = boneMappings.FirstOrDefault(m => 
-                            m.BoneName.Contains("Chest") && m.AvatarBone != null);
-                        
-                        if (chestBone != null)
-                        {
-                            // Chestボーンをマッピングに使用
-                            boneMappings.Add(new BoneMapping
-                            {
-                                BoneName = clothingTransform.name,
-                                AvatarBone = chestBone.AvatarBone,
-                                ClothingBone = clothingTransform
-                            });
-                            
-                            // マッピング済みリストに追加
-                            mappedBones.Add(clothingTransform);
-                        }
+                        break;
                     }
                 }
-            }
-        }
-        
-        /// <summary>
-        /// ボーンが装飾品やアクセサリーのカスタムボーンかどうかを判定
-        /// </summary>
-        private bool IsCustomDecorationBone(string boneName)
-        {
-            string lowercaseName = boneName.ToLower();
-            string[] decorationKeywords = new string[] 
-            { 
-                "himo", "accessory", "ornament", "ribbon", "string", "rope", 
-                "belt", "strap", "attachment", "decoration", "button",
-                "brooch", "pendant", "badge", "pin", "bangle"
-            };
-            
-            return decorationKeywords.Any(keyword => lowercaseName.Contains(keyword));
-        }
-        
-        /// <summary>
-        /// 最も近い親ボーンを探す
-        /// </summary>
-        private Transform FindNearestMappedParent(Transform bone, HashSet<Transform> mappedBones)
-        {
-            Transform current = bone.parent;
-            
-            while (current != null)
-            {
-                if (mappedBones.Contains(current))
+                
+                // マッピングされた親ボーンが見つかった場合、相対位置を記録
+                if (mappedParent != null)
                 {
-                    return current;
+                    // 親ボーンからの相対位置を記録
+                    Vector3 localPosition = mappedParent.InverseTransformPoint(unmappedBone.position);
+                    Quaternion localRotation = Quaternion.Inverse(mappedParent.rotation) * unmappedBone.rotation;
+                    
+                    // 相対情報を保存
+                    UnmappedBoneInfos[unmappedBone.name] = new UnmappedBoneInfo
+                    {
+                        BoneTransform = unmappedBone,
+                        ParentBoneTransform = mappedParent,
+                        RelativePosition = localPosition,
+                        RelativeRotation = localRotation,
+                        LocalScale = unmappedBone.localScale
+                    };
                 }
-                current = current.parent;
             }
             
-            return null;
+            // ボーンマッピングにもUnmappedとして追加（UI表示のため）
+            foreach (var unmappedInfo in UnmappedBoneInfos)
+            {
+                // マッピングされていることを示すために、アバターボーンに親のボーンを使用
+                Transform parentBone = null;
+                
+                // 親のボーンに対応するアバターのボーンを探す
+                foreach (var mapping in boneMappings)
+                {
+                    if (mapping.ClothingBone == unmappedInfo.Value.ParentBoneTransform)
+                    {
+                        parentBone = mapping.AvatarBone;
+                        break;
+                    }
+                }
+                
+                // マッピングを追加
+                if (parentBone != null)
+                {
+                    boneMappings.Add(new BoneMapping
+                    {
+                        BoneName = unmappedInfo.Key + " (Unmapped)", // Unmappedであることを明示
+                        AvatarBone = parentBone, // 親のボーンをアバターボーンとして表示
+                        ClothingBone = unmappedInfo.Value.BoneTransform,
+                        IsUnmapped = true // Unmappedフラグを設定
+                    });
+                }
+            }
         }
         
         /// <summary>
@@ -817,5 +845,44 @@ namespace VRChatAutoClothingTool
             // 総合スコア（位置の類似度を重視）
             return positionSimilarity * 0.7f + rotationSimilarity * 0.3f;
         }
+        
+        /// <summary>
+        /// 装飾品や非標準ボーンかどうかを判定
+        /// </summary>
+        public bool IsDecorationBone(string boneName)
+        {
+            string lowercaseName = boneName.ToLower();
+            
+            foreach (var keyword in decorationKeywords)
+            {
+                if (lowercaseName.Contains(keyword))
+                {
+                    return true;
+                }
+            }
+            
+            return false;
+        }
+    }
+    
+    /// <summary>
+    /// 未マッピングボーンの情報
+    /// </summary>
+    public class UnmappedBoneInfo
+    {
+        // ボーンのTransform
+        public Transform BoneTransform;
+        
+        // 親ボーンのTransform
+        public Transform ParentBoneTransform;
+        
+        // 親ボーンからの相対位置
+        public Vector3 RelativePosition;
+        
+        // 親ボーンからの相対回転
+        public Quaternion RelativeRotation;
+        
+        // ローカルスケール
+        public Vector3 LocalScale;
     }
 }
