@@ -25,6 +25,12 @@ namespace VRChatAutoClothingTool
         // ボーン対応マッピングを保存するリスト
         private List<BoneMapping> boneMappings = new List<BoneMapping>();
         
+        // 新規マッピング用の一時変数
+        private string newBoneName = "";
+        private Transform newAvatarBone;
+        private Transform newClothingBone;
+        private bool showAddMappingPanel = false;
+        
         // スケーリング設定
         private float globalScaleFactor = 1.0f;
         
@@ -206,10 +212,45 @@ namespace VRChatAutoClothingTool
             if (boneMappings.Count == 0)
             {
                 EditorGUILayout.HelpBox("アバターと衣装を選択して「ボーン構造を分析」ボタンを押してください。", MessageType.Info);
+                
+                // 手動でボーンマッピングを追加するボタンを表示
+                if (GUILayout.Button("マッピングを手動追加"))
+                {
+                    showAddMappingPanel = true;
+                }
+                
+                if (showAddMappingPanel)
+                {
+                    DrawAddMappingPanel();
+                }
+                
                 return;
             }
             
+            // マッピングの追加ボタン
+            if (GUILayout.Button("新しいマッピングを追加"))
+            {
+                showAddMappingPanel = true;
+            }
+            
+            if (showAddMappingPanel)
+            {
+                DrawAddMappingPanel();
+            }
+            
+            // マッピングリストを表示
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            
+            // テーブルヘッダー
+            EditorGUILayout.BeginHorizontal();
+            GUILayout.Label("ボーン名", GUILayout.Width(150));
+            GUILayout.Label("アバター", GUILayout.Width(150));
+            GUILayout.Label("衣装", GUILayout.Width(150));
+            GUILayout.Label("操作", GUILayout.Width(60));
+            EditorGUILayout.EndHorizontal();
+            
+            // リストを複製（削除処理中にコレクションが変更されることを防ぐため）
+            List<BoneMapping> mappingsToRemove = new List<BoneMapping>();
             
             foreach (var mapping in boneMappings)
             {
@@ -233,8 +274,80 @@ namespace VRChatAutoClothingTool
                 EditorGUILayout.LabelField("衣装:", GUILayout.Width(60));
                 mapping.ClothingBone = (Transform)EditorGUILayout.ObjectField(mapping.ClothingBone, typeof(Transform), true, GUILayout.Width(150));
                 
+                // 削除ボタン
+                if (GUILayout.Button("Del", GUILayout.Width(40)))
+                {
+                    mappingsToRemove.Add(mapping);
+                }
+                
                 EditorGUILayout.EndHorizontal();
             }
+            
+            // マッピングの削除処理
+            foreach (var mapping in mappingsToRemove)
+            {
+                boneMappings.Remove(mapping);
+            }
+            
+            EditorGUILayout.EndVertical();
+        }
+        
+        private void DrawAddMappingPanel()
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            
+            GUILayout.Label("新しいマッピングを追加", EditorStyles.boldLabel);
+            
+            newBoneName = EditorGUILayout.TextField("ボーン名", newBoneName);
+            
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.PrefixLabel("アバターボーン");
+            newAvatarBone = (Transform)EditorGUILayout.ObjectField(newAvatarBone, typeof(Transform), true);
+            EditorGUILayout.EndHorizontal();
+            
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.PrefixLabel("衣装ボーン");
+            newClothingBone = (Transform)EditorGUILayout.ObjectField(newClothingBone, typeof(Transform), true);
+            EditorGUILayout.EndHorizontal();
+            
+            EditorGUILayout.BeginHorizontal();
+            
+            if (GUILayout.Button("追加"))
+            {
+                if (!string.IsNullOrEmpty(newBoneName) && newAvatarBone != null)
+                {
+                    boneMappings.Add(new BoneMapping
+                    {
+                        BoneName = newBoneName,
+                        AvatarBone = newAvatarBone,
+                        ClothingBone = newClothingBone,
+                        SourceAnalyzer = boneAnalyzer
+                    });
+                    
+                    // フィールドをクリア
+                    newBoneName = "";
+                    newAvatarBone = null;
+                    newClothingBone = null;
+                    
+                    showAddMappingPanel = false;
+                }
+                else
+                {
+                    EditorUtility.DisplayDialog("入力エラー", "ボーン名とアバターボーンは必須です。", "OK");
+                }
+            }
+            
+            if (GUILayout.Button("キャンセル"))
+            {
+                // フィールドをクリア
+                newBoneName = "";
+                newAvatarBone = null;
+                newClothingBone = null;
+                
+                showAddMappingPanel = false;
+            }
+            
+            EditorGUILayout.EndHorizontal();
             
             EditorGUILayout.EndVertical();
         }
