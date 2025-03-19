@@ -21,7 +21,9 @@ namespace VRChatAutoClothingTool
             float penetrationPushOutDistance,
             float penetrationThreshold,
             bool useAdvancedSampling,
-            bool preferBodyMeshes)
+            bool preferBodyMeshes,
+            bool preserveMeshShape = true,
+            float preserveStrength = 0.5f)
         {
             if (avatarObject == null || clothingObject == null || boneMappings == null)
                 return false;
@@ -58,7 +60,9 @@ namespace VRChatAutoClothingTool
                         penetrationPushOutDistance,
                         penetrationThreshold,
                         useAdvancedSampling,
-                        preferBodyMeshes
+                        preferBodyMeshes,
+                        preserveMeshShape,
+                        preserveStrength
                     );
                 }
                 
@@ -150,7 +154,9 @@ namespace VRChatAutoClothingTool
             float penetrationPushOutDistance,
             float penetrationThreshold,
             bool useAdvancedSampling,
-            bool preferBodyMeshes)
+            bool preferBodyMeshes,
+            bool preserveMeshShape = true,
+            float preserveStrength = 0.5f)
         {
             if (avatarObject == null || clothingObject == null || boneMappings == null)
                 return;
@@ -207,7 +213,9 @@ namespace VRChatAutoClothingTool
                     penetrationPushOutDistance,
                     penetrationThreshold,
                     useAdvancedSampling,
-                    preferBodyMeshes
+                    preferBodyMeshes,
+                    preserveMeshShape,
+                    preserveStrength
                 );
             }
             
