@@ -19,13 +19,36 @@ namespace VRChatAutoClothingTool
             "RightUpperLeg", "RightLowerLeg", "RightFoot", "RightToes"
         };
         
-        // 追加のボーン名パターン
+        // 追加のボーン名パターン (ドット形式とアンダースコア形式両方) - 拡張版
         private readonly List<string> additionalBonePatterns = new List<string>
         {
-            "UpperLeg.L", "UpperLeg_L",
-            "UpperLeg.R", "UpperLeg_R",
-            "Shoulder.L", "Shoulder_L",
-            "Shoulder.R", "Shoulder_R"
+            // UpperLegの様々なバリエーション
+            "UpperLeg.L", "UpperLeg_L", "Upper.Leg.L", "Upper.Leg_L", 
+            "Upper_Leg.L", "Upper_Leg_L", "Upper_leg.L", "Upper_leg_L",
+            "UpperLeg.R", "UpperLeg_R", "Upper.Leg.R", "Upper.Leg_R", 
+            "Upper_Leg.R", "Upper_Leg_R", "Upper_leg.R", "Upper_leg_R",
+            
+            // Shoulderの様々なバリエーション
+            "Shoulder.L", "Shoulder_L", "shoulder.L", "shoulder_L",
+            "Shoulder.R", "Shoulder_R", "shoulder.R", "shoulder_R",
+            
+            // 追加のLowerLegバリエーション
+            "LowerLeg.L", "LowerLeg_L", "Lower.Leg.L", "Lower.Leg_L", 
+            "Lower_Leg.L", "Lower_Leg_L", "Lower_leg.L", "Lower_leg_L",
+            "LowerLeg.R", "LowerLeg_R", "Lower.Leg.R", "Lower.Leg_R", 
+            "Lower_Leg.R", "Lower_Leg_R", "Lower_leg.R", "Lower_leg_R",
+            
+            // 追加のUpperArmバリエーション
+            "UpperArm.L", "UpperArm_L", "Upper.Arm.L", "Upper.Arm_L", 
+            "Upper_Arm.L", "Upper_Arm_L", "Upper_arm.L", "Upper_arm_L",
+            "UpperArm.R", "UpperArm_R", "Upper.Arm.R", "Upper.Arm_R", 
+            "Upper_Arm.R", "Upper_Arm_R", "Upper_arm.R", "Upper_arm_R",
+            
+            // 追加のLowerArmバリエーション
+            "LowerArm.L", "LowerArm_L", "Lower.Arm.L", "Lower.Arm_L", 
+            "Lower_Arm.L", "Lower_Arm_L", "Lower_arm.L", "Lower_arm_L",
+            "LowerArm.R", "LowerArm_R", "Lower.Arm.R", "Lower.Arm_R", 
+            "Lower_Arm.R", "Lower_Arm_R", "Lower_arm.R", "Lower_arm_R"
         };
         
         // 指のボーン名
@@ -115,6 +138,17 @@ namespace VRChatAutoClothingTool
         {
             Dictionary<string, Transform> bones = new Dictionary<string, Transform>();
             
+            // 正規化されたボーン名のマッピング (大文字小文字、ドット、アンダースコアの違いを無視)
+            Dictionary<string, string> normalizedNameMap = new Dictionary<string, string>();
+            foreach (var boneName in boneNames)
+            {
+                string normalizedName = NormalizeBoneName(boneName).ToLower();
+                if (!normalizedNameMap.ContainsKey(normalizedName))
+                {
+                    normalizedNameMap[normalizedName] = boneName;
+                }
+            }
+            
             foreach (var boneTransform in transforms)
             {
                 var boneName = boneTransform.name;
@@ -126,12 +160,20 @@ namespace VRChatAutoClothingTool
                     continue;
                 }
                 
-                // パターンマッチング - ドット/アンダースコア表記に対応
+                // 正規化した名前でマッチング
+                string normalizedBoneName = NormalizeBoneName(boneName).ToLower();
+                if (normalizedNameMap.ContainsKey(normalizedBoneName))
+                {
+                    // 元の標準名を使用
+                    bones[normalizedNameMap[normalizedBoneName]] = boneTransform;
+                    continue;
+                }
+                
+                // パターンマッチング（部分一致）- 大文字小文字を区別せずに
                 foreach (var pattern in boneNames)
                 {
                     // "Shoulder.L" と "Shoulder_L" を同等に扱う
-                    string normalizedPattern = NormalizeBoneName(pattern);
-                    string normalizedBoneName = NormalizeBoneName(boneName);
+                    string normalizedPattern = NormalizeBoneName(pattern).ToLower();
                     
                     if (normalizedBoneName.Contains(normalizedPattern) || 
                         normalizedPattern.Contains(normalizedBoneName))
@@ -150,6 +192,7 @@ namespace VRChatAutoClothingTool
         /// </summary>
         private string NormalizeBoneName(string boneName)
         {
+            // ドットとアンダースコアを共通文字に置換
             return boneName.Replace('.', '_').Replace('_', '.');
         }
         
@@ -164,16 +207,27 @@ namespace VRChatAutoClothingTool
                 return clothingTransform;
             }
             
-            // 部分一致または類似パターンを探す
-            string normalizedBoneName = NormalizeBoneName(avatarBoneName);
+            // 正規化された名前でマッチングを試みる
+            string normalizedAvatarBoneName = NormalizeBoneName(avatarBoneName).ToLower();
             
+            // 部分一致または類似パターンを探す
             foreach (var clothingBone in clothingBones)
             {
-                string normalizedClothingName = NormalizeBoneName(clothingBone.Key);
+                string normalizedClothingName = NormalizeBoneName(clothingBone.Key).ToLower();
                 
-                // ドット/アンダースコアの違いを無視して一致するかチェック
-                if (normalizedClothingName.Contains(normalizedBoneName) || 
-                    normalizedBoneName.Contains(normalizedClothingName))
+                // 正規化された名前でスマートマッチング
+                if (IsSmartBoneMatch(normalizedAvatarBoneName, normalizedClothingName))
+                {
+                    return clothingBone.Value;
+                }
+            }
+            
+            // Leg/Arm等の基本部位名でフォールバックマッチング
+            foreach (var clothingBone in clothingBones)
+            {
+                string normalizedClothingName = NormalizeBoneName(clothingBone.Key).ToLower();
+                
+                if (DoesShareCommonPartName(normalizedAvatarBoneName, normalizedClothingName))
                 {
                     return clothingBone.Value;
                 }
@@ -185,29 +239,188 @@ namespace VRChatAutoClothingTool
         }
         
         /// <summary>
+        /// 2つのボーン名が特定の部位（Leg/Arm等）を共有しているかを判定
+        /// </summary>
+        private bool DoesShareCommonPartName(string name1, string name2)
+        {
+            string[] commonParts = new string[] 
+            { 
+                "leg", "arm", "hand", "foot", "shoulder", "head", 
+                "spine", "chest", "hip", "neck" 
+            };
+            
+            foreach (var part in commonParts)
+            {
+                if (name1.Contains(part) && name2.Contains(part))
+                {
+                    // 左右の一致も確認
+                    bool name1IsLeft = name1.Contains("left") || name1.Contains(".l") || name1.EndsWith("l");
+                    bool name1IsRight = name1.Contains("right") || name1.Contains(".r") || name1.EndsWith("r");
+                    bool name2IsLeft = name2.Contains("left") || name2.Contains(".l") || name2.EndsWith("l");
+                    bool name2IsRight = name2.Contains("right") || name2.Contains(".r") || name2.EndsWith("r");
+                    
+                    // 左右が一致、または左右の指定がない場合
+                    if ((name1IsLeft && name2IsLeft) || 
+                        (name1IsRight && name2IsRight) || 
+                        (!name1IsLeft && !name1IsRight && !name2IsLeft && !name2IsRight))
+                    {
+                        return true;
+                    }
+                }
+            }
+            
+            return false;
+        }
+        
+        /// <summary>
+        /// スマートなボーンマッチング（Upper_leg.L -> UpperLeg.L などを処理）
+        /// </summary>
+        private bool IsSmartBoneMatch(string name1, string name2)
+        {
+            // 完全一致
+            if (name1 == name2) return true;
+            
+            // ドット/アンダースコアの違いを無視した一致
+            if (name1.Replace('.', '_').Replace('_', '.') == 
+                name2.Replace('.', '_').Replace('_', '.')) 
+                return true;
+            
+            // 部分一致
+            if (name1.Contains(name2) || name2.Contains(name1)) return true;
+            
+            // Upper_leg.L -> UpperLeg.L などのバリエーション
+            if (TryMatchUpperLowerVariants(name1, name2)) return true;
+            
+            // Left/Right と .L/.R の対応
+            if (MatchLeftRightVariants(name1, name2)) return true;
+            
+            return false;
+        }
+        
+        /// <summary>
+        /// Upper_leg.L -> UpperLeg.L などのバリエーションを処理
+        /// </summary>
+        private bool TryMatchUpperLowerVariants(string name1, string name2)
+        {
+            // Upper/Lowerのパターン
+            string[] patterns = new string[] 
+            { 
+                "upper", "lower", "leg", "arm", "shoulder" 
+            };
+            
+            // 異なる区切り文字による同一ボーンのバリエーションをチェック
+            foreach (var pattern in patterns)
+            {
+                if ((name1.Contains(pattern) && name2.Contains(pattern)))
+                {
+                    string[] variants = new string[] 
+                    {
+                        pattern,              // leg
+                        "." + pattern,        // .leg
+                        "_" + pattern,        // _leg
+                        pattern.ToUpper(),    // LEG
+                        "." + pattern.ToUpper(), // .LEG
+                        "_" + pattern.ToUpper()  // _LEG
+                    };
+                    
+                    foreach (var variant1 in variants)
+                    {
+                        if (name1.Contains(variant1))
+                        {
+                            foreach (var variant2 in variants)
+                            {
+                                if (name2.Contains(variant2))
+                                {
+                                    // 左右の一致も確認
+                                    bool name1IsLeft = name1.Contains("left") || name1.Contains(".l") || name1.EndsWith("l");
+                                    bool name1IsRight = name1.Contains("right") || name1.Contains(".r") || name1.EndsWith("r");
+                                    bool name2IsLeft = name2.Contains("left") || name2.Contains(".l") || name2.EndsWith("l");
+                                    bool name2IsRight = name2.Contains("right") || name2.Contains(".r") || name2.EndsWith("r");
+                                    
+                                    if ((name1IsLeft && name2IsLeft) || (name1IsRight && name2IsRight))
+                                    {
+                                        return true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            
+            return false;
+        }
+        
+        /// <summary>
+        /// Left/Right と .L/.R の対応を処理
+        /// </summary>
+        private bool MatchLeftRightVariants(string name1, string name2)
+        {
+            // 左右のバリエーション
+            string[][] sideVariants = new string[][] 
+            {
+                new string[] { "left", ".l", "_l" },
+                new string[] { "right", ".r", "_r" }
+            };
+            
+            // 各バリエーションでチェック
+            foreach (var sideGroup in sideVariants)
+            {
+                bool name1HasSide = false;
+                bool name2HasSide = false;
+                
+                foreach (var side in sideGroup)
+                {
+                    name1HasSide |= name1.Contains(side);
+                    name2HasSide |= name2.Contains(side);
+                }
+                
+                if (name1HasSide && name2HasSide)
+                {
+                    // 基本部分の名前（leg, arm等）も一致するかチェック
+                    string baseName1 = RemoveSideSuffix(name1);
+                    string baseName2 = RemoveSideSuffix(name2);
+                    
+                    if (baseName1.Contains(baseName2) || baseName2.Contains(baseName1))
+                    {
+                        return true;
+                    }
+                }
+            }
+            
+            return false;
+        }
+        
+        /// <summary>
+        /// ボーン名から左右の接尾辞を除去
+        /// </summary>
+        private string RemoveSideSuffix(string boneName)
+        {
+            // .L, .R, _L, _R等の接尾辞を削除
+            string[] suffixes = new string[] { ".l", ".r", "_l", "_r" };
+            string result = boneName.ToLower();
+            
+            foreach (var suffix in suffixes)
+            {
+                if (result.EndsWith(suffix))
+                {
+                    return result.Substring(0, result.Length - suffix.Length);
+                }
+            }
+            
+            // Left, Right等の文字列を削除
+            result = result.Replace("left", "").Replace("right", "");
+            
+            return result;
+        }
+        
+        /// <summary>
         /// 二つのボーン名が同等かどうかを判定
         /// </summary>
         public bool AreBonesEquivalent(string boneName1, string boneName2)
         {
-            // 完全一致
-            if (boneName1 == boneName2) return true;
-            
-            // 正規化して比較
-            string normalized1 = NormalizeBoneName(boneName1);
-            string normalized2 = NormalizeBoneName(boneName2);
-            
-            if (normalized1 == normalized2) return true;
-            
-            // 部分一致
-            if (normalized1.Contains(normalized2) || normalized2.Contains(normalized1)) return true;
-            
-            // 特別なケース（"Left"と"Right"の対称性など）の処理
-            foreach (var side in handSides)
-            {
-                if (normalized1.Contains(side) && normalized2.Contains(side)) return true;
-            }
-            
-            return false;
+            // スマートマッチングで判定
+            return IsSmartBoneMatch(boneName1.ToLower(), boneName2.ToLower());
         }
         
         /// <summary>
