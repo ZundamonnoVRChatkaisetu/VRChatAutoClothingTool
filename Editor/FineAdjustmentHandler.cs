@@ -65,6 +65,13 @@ namespace VRChatAutoClothingTool
                 { 
                     "Back", "Spine", "Shoulder", "Scapula", "Clavicle"
                 }
+            },
+            // その他のボーン
+            { "その他", new string[] 
+                { 
+                    "Himo", "Accessory", "Ornament", "Ribbon", "String", "Rope", 
+                    "Belt", "Strap", "Attachment", "Decoration", "Button"
+                }
             }
         };
 
@@ -92,6 +99,16 @@ namespace VRChatAutoClothingTool
         /// 部位ごとのキャッシュされたボーンリスト
         /// </summary>
         private Dictionary<string, List<Transform>> cachedPartBones = new Dictionary<string, List<Transform>>();
+
+        /// <summary>
+        /// 部位ごとの元のスケール値を保存
+        /// </summary>
+        private Dictionary<Transform, Vector3> originalScales = new Dictionary<Transform, Vector3>();
+
+        /// <summary>
+        /// 部位ごとの元の位置を保存
+        /// </summary>
+        private Dictionary<Transform, Vector3> originalPositions = new Dictionary<Transform, Vector3>();
 
         /// <summary>
         /// 初期化
@@ -132,15 +149,36 @@ namespace VRChatAutoClothingTool
             // 部位選択ドロップダウン
             EditorGUILayout.Space(5);
             GUILayout.Label("調整部位", EditorStyles.boldLabel);
+            
+            int prevSelectedPartIndex = selectedPartIndex;
             EditorGUI.BeginChangeCheck();
             selectedPartIndex = EditorGUILayout.Popup("部位選択", selectedPartIndex, bodyParts);
             string selectedPart = bodyParts[selectedPartIndex];
             
+            // 部位が変更された場合にボーンのキャッシュをクリア
+            if (prevSelectedPartIndex != selectedPartIndex)
+            {
+                cachedPartBones[selectedPart].Clear();
+            }
+
             // 部位ごとのボーンを初期キャッシュ（必要な場合）
             if (clothingObject != null && selectedPart != "全体" && 
                 (cachedPartBones[selectedPart] == null || cachedPartBones[selectedPart].Count == 0))
             {
                 cachedPartBones[selectedPart] = FindPartBones(clothingObject, selectedPart);
+                
+                // ボーンごとの初期スケールと位置を保存
+                foreach (Transform bone in cachedPartBones[selectedPart])
+                {
+                    if (!originalScales.ContainsKey(bone))
+                    {
+                        originalScales[bone] = bone.localScale;
+                    }
+                    if (!originalPositions.ContainsKey(bone))
+                    {
+                        originalPositions[bone] = bone.position;
+                    }
+                }
                 
                 if (cachedPartBones[selectedPart].Count > 0)
                 {
@@ -266,6 +304,12 @@ namespace VRChatAutoClothingTool
                 // 調整を適用
                 if (selectedPart == "全体")
                 {
+                    // 全体調整の前に、部位ごとの調整をリセット
+                    if (sizeChanged)
+                    {
+                        ResetAllPartAdjustmentsScaleOnly(clothingObject);
+                    }
+                    
                     UpdateGlobalAdjustment(
                         clothingObject,
                         avatarObject,
@@ -285,25 +329,27 @@ namespace VRChatAutoClothingTool
                         selectedPart,
                         partSizeAdjustments[selectedPart],
                         partPositionAdjustments[selectedPart],
-                        rotationAdjustment,
                         sizeChanged,
-                        positionChanged,
-                        rotationChanged
+                        positionChanged
                     );
+                    
+                    if (rotationChanged)
+                    {
+                        // 回転は全体に適用
+                        UpdateGlobalRotation(
+                            clothingObject,
+                            avatarObject,
+                            rotationAdjustment
+                        );
+                    }
                 }
                 else if (rotationChanged)
                 {
                     // 部位別調整が無効でも、回転は全体に適用
-                    UpdateGlobalAdjustment(
+                    UpdateGlobalRotation(
                         clothingObject,
                         avatarObject,
-                        sizeAdjustment,
-                        positionAdjustment,
-                        rotationAdjustment,
-                        ref lastSizeAdjustment,
-                        false,
-                        false,
-                        true
+                        rotationAdjustment
                     );
                 }
             }
@@ -365,8 +411,8 @@ namespace VRChatAutoClothingTool
             // サイズ調整
             if (sizeChanged)
             {
-                // サイズを調整する新しいユーティリティを使用
-                MeshTransformation.AdjustClothingSize(clothingObject, sizeAdjustment);
+                // rootのスケールだけ変更し、子オブジェクトには影響させない
+                clothingObject.transform.localScale = Vector3.one * sizeAdjustment;
                 
                 // 現在のサイズ調整値を保存
                 lastSizeAdjustment = sizeAdjustment;
@@ -383,9 +429,7 @@ namespace VRChatAutoClothingTool
             // 回転調整
             if (rotationChanged)
             {
-                // 回転を調整する新しいユーティリティを使用
-                Quaternion newRotation = avatarObject.transform.rotation * Quaternion.Euler(rotationAdjustment);
-                clothingObject.transform.rotation = newRotation;
+                UpdateGlobalRotation(clothingObject, avatarObject, rotationAdjustment);
             }
             
             // シーンビューの更新
@@ -393,17 +437,33 @@ namespace VRChatAutoClothingTool
         }
         
         /// <summary>
-        /// 部位ごとの微調整を適用
+        /// 全体の回転だけを更新
+        /// </summary>
+        private void UpdateGlobalRotation(
+            GameObject clothingObject, 
+            GameObject avatarObject, 
+            Vector3 rotationAdjustment)
+        {
+            if (clothingObject == null || avatarObject == null) return;
+            
+            // 回転を調整する新しいユーティリティを使用
+            Quaternion newRotation = avatarObject.transform.rotation * Quaternion.Euler(rotationAdjustment);
+            clothingObject.transform.rotation = newRotation;
+            
+            // シーンビューの更新
+            SceneView.RepaintAll();
+        }
+        
+        /// <summary>
+        /// 部位ごとの微調整を適用（改良版）
         /// </summary>
         private void UpdatePartAdjustment(
             GameObject clothingObject,
             string partName,
             float partSizeAdjustment,
             Vector3 partPositionAdjustment,
-            Vector3 rotationAdjustment,
             bool sizeChanged,
-            bool positionChanged,
-            bool rotationChanged)
+            bool positionChanged)
         {
             if (clothingObject == null) return;
             
@@ -428,8 +488,18 @@ namespace VRChatAutoClothingTool
             {
                 foreach (Transform bone in partBones)
                 {
-                    // ボーンのスケールを調整
-                    bone.localScale = Vector3.one * partSizeAdjustment;
+                    // 元のスケールを基準に調整
+                    if (originalScales.TryGetValue(bone, out Vector3 originalScale))
+                    {
+                        // オリジナルのスケールにサイズ調整を反映
+                        bone.localScale = originalScale * partSizeAdjustment;
+                    }
+                    else
+                    {
+                        // 元のスケールが保存されていない場合は注意ログを出力
+                        Debug.LogWarning($"ボーン {bone.name} の元のスケールが保存されていません。");
+                        bone.localScale = Vector3.one * partSizeAdjustment;
+                    }
                 }
             }
             
@@ -441,42 +511,65 @@ namespace VRChatAutoClothingTool
                 
                 if (parentBone != null)
                 {
-                    // 親ボーンの位置を調整
-                    Vector3 currentPos = parentBone.position;
+                    // 親ボーンの元の位置を取得
+                    Vector3 originalPosition = originalPositions.TryGetValue(parentBone, out Vector3 origPos) 
+                        ? origPos 
+                        : parentBone.position;
                     
-                    // 現在の調整から最適なオフセットを計算
-                    Vector3 adjustedPos = currentPos + new Vector3(
-                        partPositionAdjustment.x,
-                        partPositionAdjustment.y,
-                        partPositionAdjustment.z
-                    );
+                    // 現在のオフセットを計算
+                    Vector3 currentOffset = parentBone.position - originalPosition;
                     
-                    parentBone.position = adjustedPos;
+                    // 新しい位置を計算
+                    Vector3 newPosition = originalPosition + partPositionAdjustment + currentOffset;
+                    parentBone.position = newPosition;
                 }
                 else
                 {
                     // 親ボーンが特定できない場合は、各ボーンを個別に調整
                     foreach (Transform bone in partBones)
                     {
-                        Vector3 currentPos = bone.position;
+                        // 元の位置を取得
+                        Vector3 originalPosition = originalPositions.TryGetValue(bone, out Vector3 origPos) 
+                            ? origPos 
+                            : bone.position;
                         
-                        // 各ボーンは全体の影響を小さく受ける
-                        Vector3 adjustedPos = currentPos + new Vector3(
-                            partPositionAdjustment.x / partBones.Count,
-                            partPositionAdjustment.y / partBones.Count,
-                            partPositionAdjustment.z / partBones.Count
-                        );
+                        // 現在のオフセットを計算
+                        Vector3 currentOffset = bone.position - originalPosition;
                         
-                        bone.position = adjustedPos;
+                        // 新しい位置を計算（各ボーンに小さな調整を適用）
+                        Vector3 adjustment = partPositionAdjustment / partBones.Count;
+                        Vector3 newPosition = originalPosition + adjustment + currentOffset;
+                        bone.position = newPosition;
                     }
                 }
             }
             
-            // 部分的な回転調整はより複雑なため、ここでは全体的な回転のみを適用（必要に応じて実装）
-            // 回転は全体に対してのみ適用するため、ここでは何もしない
-            
             // シーンビューの更新
             SceneView.RepaintAll();
+        }
+        
+        /// <summary>
+        /// すべての部位調整をスケールのみリセット
+        /// </summary>
+        private void ResetAllPartAdjustmentsScaleOnly(GameObject clothingObject)
+        {
+            if (clothingObject == null) return;
+            
+            // すべてのボーンのスケールをリセット
+            foreach (var entry in cachedPartBones)
+            {
+                string partName = entry.Key;
+                if (partName == "全体") continue;
+                
+                List<Transform> bones = entry.Value;
+                foreach (Transform bone in bones)
+                {
+                    if (originalScales.TryGetValue(bone, out Vector3 originalScale))
+                    {
+                        bone.localScale = originalScale;
+                    }
+                }
+            }
         }
         
         /// <summary>
@@ -487,7 +580,7 @@ namespace VRChatAutoClothingTool
             List<Transform> partBones = new List<Transform>();
             
             // 部位名に対応するボーン名の配列を取得
-            if (!bodyPartBonesMap.TryGetValue(partName, out string[] boneNames))
+            if (!bodyPartBonesMap.TryGetValue(partName, out string[] bonePatterns))
             {
                 return partBones; // 空のリストを返す
             }
@@ -501,7 +594,7 @@ namespace VRChatAutoClothingTool
                 string boneName = bone.name.ToLower();
                 
                 // いずれかのボーン名パターンが含まれるか確認
-                if (boneNames.Any(pattern => boneName.Contains(pattern.ToLower())))
+                if (bonePatterns.Any(pattern => boneName.Contains(pattern.ToLower())))
                 {
                     partBones.Add(bone);
                 }
@@ -566,13 +659,20 @@ namespace VRChatAutoClothingTool
             {
                 Undo.RecordObject(bone, "Reset Part Adjustment");
                 
-                // スケールを1に戻す
-                bone.localScale = Vector3.one;
-                
-                // 位置の調整をリセット（難しいので親ボーンのみ）
-                if (bone == FindParentBone(partBones))
+                // 元のスケールに戻す
+                if (originalScales.TryGetValue(bone, out Vector3 originalScale))
                 {
-                    // 位置はUndo機能に頼る (SetTransformUndoの仕組みを活用)
+                    bone.localScale = originalScale;
+                }
+                else
+                {
+                    bone.localScale = Vector3.one;
+                }
+                
+                // 元の位置に戻す
+                if (originalPositions.TryGetValue(bone, out Vector3 originalPosition))
+                {
+                    bone.position = originalPosition;
                 }
             }
             
@@ -638,7 +738,22 @@ namespace VRChatAutoClothingTool
                 if (bone == clothingObject.transform) continue; // ルートは除外
                 
                 Undo.RecordObject(bone, "Reset Bone Scale");
-                bone.localScale = Vector3.one;
+                
+                // 元のスケールに戻す
+                if (originalScales.TryGetValue(bone, out Vector3 originalScale))
+                {
+                    bone.localScale = originalScale;
+                }
+                else
+                {
+                    bone.localScale = Vector3.one;
+                }
+                
+                // 元の位置に戻す
+                if (originalPositions.TryGetValue(bone, out Vector3 originalPosition))
+                {
+                    bone.position = originalPosition;
+                }
             }
         }
         
@@ -663,6 +778,10 @@ namespace VRChatAutoClothingTool
             {
                 if (bone == clothingObject.transform) continue; // ルートは除外
                 Undo.RecordObject(bone, "Finalize Bone Adjustment");
+                
+                // 現在の状態を新しい「元の状態」として保存
+                originalScales[bone] = bone.localScale;
+                originalPositions[bone] = bone.position;
             }
             
             // 微調整開始フラグをリセット
@@ -726,7 +845,7 @@ namespace VRChatAutoClothingTool
             rotationAdjustment = presetRotation;
             
             // サイズ調整
-            MeshTransformation.AdjustClothingSize(clothingObject, sizeAdjustment);
+            clothingObject.transform.localScale = Vector3.one * sizeAdjustment;
             lastSizeAdjustment = sizeAdjustment;
             
             // 位置調整
