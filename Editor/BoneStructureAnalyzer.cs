@@ -133,7 +133,9 @@ namespace VRChatAutoClothingTool
         private readonly List<string> criticalBoneNames = new List<string>
         {
             "Hand_L", "Hand_R", "Foot_L", "Foot_R", "Toe_L", "Toe_R",
-            "hand_l", "hand_r", "foot_l", "foot_r", "toe_l", "toe_r"
+            "hand_l", "hand_r", "foot_l", "foot_r", "toe_l", "toe_r",
+            "Hand.L", "Hand.R", "Foot.L", "Foot.R", "Toe.L", "Toe.R",
+            "hand.l", "hand.r", "foot.l", "foot.r", "toe.l", "toe.r"
         };
         
         /// <summary>
@@ -192,10 +194,182 @@ namespace VRChatAutoClothingTool
             // 重要なボーン（Hand_L/R、Foot_L/R、Toe_L/R等）が含まれているか確認し、なければ追加
             EnsureCriticalBonesAreMapped(avatarTransforms, clothingTransforms, boneMappings);
             
+            // 親子関係によるボーンの検索と追加（特に手足のボーン）
+            FindAndMapHierarchicalBones(avatarTransforms, clothingTransforms, boneMappings);
+            
             // マッピングされなかった衣装のボーンを処理
             ProcessUnmappedBones(clothingObject, clothingTransforms, boneMappings);
             
             return boneMappings;
+        }
+
+        /// <summary>
+        /// 親子関係を使用して重要なボーンを検索し、マッピングに追加する
+        /// </summary>
+        private void FindAndMapHierarchicalBones(Transform[] avatarTransforms, Transform[] clothingTransforms, List<BoneMapping> boneMappings)
+        {
+            // 親子関係で特定の重要なボーンを探す（Hand/Foot/Toeなど）
+            string[] parentChildPairs = new string[]
+            {
+                "LowerArm_L,Hand_L", "LowerArm_R,Hand_R",
+                "Lower_Arm_L,Hand_L", "Lower_Arm_R,Hand_R",
+                "LowerLeg_L,Foot_L", "LowerLeg_R,Foot_R",
+                "Lower_Leg_L,Foot_L", "Lower_Leg_R,Foot_R",
+                "Foot_L,Toe_L", "Foot_R,Toe_R"
+            };
+            
+            // すでにマッピングされているボーン名のセット
+            HashSet<string> mappedBoneNames = new HashSet<string>(
+                boneMappings.Where(m => m.ClothingBone != null).Select(m => m.BoneName.ToLower())
+            );
+            
+            // アバター側のボーン階層マップを作成
+            Dictionary<string, List<Transform>> avatarChildrenMap = new Dictionary<string, List<Transform>>();
+            foreach (var transform in avatarTransforms)
+            {
+                if (transform.parent != null)
+                {
+                    string parentName = transform.parent.name.ToLower();
+                    if (!avatarChildrenMap.ContainsKey(parentName))
+                    {
+                        avatarChildrenMap[parentName] = new List<Transform>();
+                    }
+                    avatarChildrenMap[parentName].Add(transform);
+                }
+            }
+            
+            // 衣装側のボーン階層マップを作成
+            Dictionary<string, List<Transform>> clothingChildrenMap = new Dictionary<string, List<Transform>>();
+            foreach (var transform in clothingTransforms)
+            {
+                if (transform.parent != null)
+                {
+                    string parentName = transform.parent.name.ToLower();
+                    if (!clothingChildrenMap.ContainsKey(parentName))
+                    {
+                        clothingChildrenMap[parentName] = new List<Transform>();
+                    }
+                    clothingChildrenMap[parentName].Add(transform);
+                }
+            }
+            
+            // 各親子ペアで検索
+            foreach (string pair in parentChildPairs)
+            {
+                string[] parts = pair.Split(',');
+                string parentName = parts[0].ToLower();
+                string childName = parts[1].ToLower();
+                
+                // すでにマッピングされている場合はスキップ
+                if (mappedBoneNames.Contains(childName))
+                {
+                    continue;
+                }
+                
+                // アバター側で親ボーンがマッピングされているか確認
+                Transform avatarParentBone = null;
+                foreach (var mapping in boneMappings)
+                {
+                    if (mapping.AvatarBone != null && 
+                        NormalizeBoneName(mapping.AvatarBone.name).ToLower() == NormalizeBoneName(parentName).ToLower())
+                    {
+                        avatarParentBone = mapping.AvatarBone;
+                        break;
+                    }
+                }
+                
+                if (avatarParentBone == null) continue;
+                
+                // アバター側で子ボーンを見つける
+                Transform avatarChildBone = null;
+                
+                // 直接の子ボーンから探す
+                foreach (Transform child in avatarParentBone)
+                {
+                    string normalizedChildName = NormalizeBoneName(child.name).ToLower();
+                    if (normalizedChildName == NormalizeBoneName(childName).ToLower() || 
+                        normalizedChildName.Contains(NormalizeBoneName(childName).ToLower()))
+                    {
+                        avatarChildBone = child;
+                        break;
+                    }
+                }
+                
+                // 子ボーンのリストから探す
+                if (avatarChildBone == null && avatarChildrenMap.ContainsKey(avatarParentBone.name.ToLower()))
+                {
+                    foreach (var child in avatarChildrenMap[avatarParentBone.name.ToLower()])
+                    {
+                        string normalizedChildName = NormalizeBoneName(child.name).ToLower();
+                        if (normalizedChildName == NormalizeBoneName(childName).ToLower() || 
+                            normalizedChildName.Contains(NormalizeBoneName(childName).ToLower()))
+                        {
+                            avatarChildBone = child;
+                            break;
+                        }
+                    }
+                }
+                
+                // アバター側のボーンが見つからなかった場合
+                if (avatarChildBone == null) continue;
+                
+                // 衣装側で親ボーンに対応するマッピングを見つける
+                Transform clothingParentBone = null;
+                foreach (var mapping in boneMappings)
+                {
+                    if (mapping.AvatarBone == avatarParentBone && mapping.ClothingBone != null)
+                    {
+                        clothingParentBone = mapping.ClothingBone;
+                        break;
+                    }
+                }
+                
+                if (clothingParentBone == null) continue;
+                
+                // 衣装側で子ボーンを見つける
+                Transform clothingChildBone = null;
+                
+                // 直接の子ボーンから探す
+                foreach (Transform child in clothingParentBone)
+                {
+                    string normalizedChildName = NormalizeBoneName(child.name).ToLower();
+                    if (normalizedChildName == NormalizeBoneName(childName).ToLower() || 
+                        normalizedChildName.Contains(NormalizeBoneName(childName).ToLower()))
+                    {
+                        clothingChildBone = child;
+                        break;
+                    }
+                }
+                
+                // 子ボーンのリストから探す
+                if (clothingChildBone == null && clothingChildrenMap.ContainsKey(clothingParentBone.name.ToLower()))
+                {
+                    foreach (var child in clothingChildrenMap[clothingParentBone.name.ToLower()])
+                    {
+                        string normalizedChildName = NormalizeBoneName(child.name).ToLower();
+                        if (normalizedChildName == NormalizeBoneName(childName).ToLower() || 
+                            normalizedChildName.Contains(NormalizeBoneName(childName).ToLower()))
+                        {
+                            clothingChildBone = child;
+                            break;
+                        }
+                    }
+                }
+                
+                // 両方見つかった場合、マッピングに追加
+                if (avatarChildBone != null && clothingChildBone != null)
+                {
+                    boneMappings.Add(new BoneMapping
+                    {
+                        BoneName = childName,
+                        AvatarBone = avatarChildBone,
+                        ClothingBone = clothingChildBone
+                    });
+                    
+                    // マッピング済みのセットに追加
+                    mappedBoneNames.Add(childName);
+                }
+            }
         }
 
         /// <summary>
@@ -246,8 +420,8 @@ namespace VRChatAutoClothingTool
                 if (clothingBone == null)
                 {
                     // 左側のボーンか右側のボーンかを判断
-                    bool isLeftSide = lowerCriticalName.Contains("_l") || lowerCriticalName.EndsWith("l");
-                    bool isRightSide = lowerCriticalName.Contains("_r") || lowerCriticalName.EndsWith("r");
+                    bool isLeftSide = lowerCriticalName.Contains("_l") || lowerCriticalName.EndsWith("l") || lowerCriticalName.Contains(".l");
+                    bool isRightSide = lowerCriticalName.Contains("_r") || lowerCriticalName.EndsWith("r") || lowerCriticalName.Contains(".r");
                     
                     // Hand/Foot/Toeのどのタイプかを判断
                     bool isHand = lowerCriticalName.Contains("hand");
@@ -259,11 +433,11 @@ namespace VRChatAutoClothingTool
                     {
                         string lowerName = transform.name.ToLower();
                         
-                        bool matchesSide = (isLeftSide && (lowerName.Contains("_l") || lowerName.EndsWith("l") || lowerName.Contains("left"))) ||
-                                         (isRightSide && (lowerName.Contains("_r") || lowerName.EndsWith("r") || lowerName.Contains("right")));
+                        bool matchesSide = (isLeftSide && (lowerName.Contains("_l") || lowerName.EndsWith("l") || lowerName.Contains(".l") || lowerName.Contains("left"))) ||
+                                         (isRightSide && (lowerName.Contains("_r") || lowerName.EndsWith("r") || lowerName.Contains(".r") || lowerName.Contains("right")));
                         
-                        bool matchesType = (isHand && (lowerName.Contains("hand") || lowerName.Contains("wrist"))) ||
-                                         (isFoot && (lowerName.Contains("foot") || lowerName.Contains("ankle"))) ||
+                        bool matchesType = (isHand && (lowerName.Contains("hand") || lowerName.Contains("wrist") || lowerName.Contains("palm"))) ||
+                                         (isFoot && (lowerName.Contains("foot") || lowerName.Contains("ankle") || lowerName.Contains("heel"))) ||
                                          (isToe && (lowerName.Contains("toe") || lowerName.Contains("toes")));
                         
                         if (matchesSide && matchesType)
@@ -271,6 +445,35 @@ namespace VRChatAutoClothingTool
                             clothingBone = transform;
                             break;
                         }
+                    }
+                }
+                
+                // 位置ベースのマッチングも試す（位置が近いボーンを探す）
+                if (clothingBone == null)
+                {
+                    float bestDistance = float.MaxValue;
+                    Transform bestMatch = null;
+                    
+                    foreach (var transform in clothingTransforms)
+                    {
+                        // 明らかに関係ないものは除外（Root、Mesh、Renderer等）
+                        if (transform.name.Contains("Root") || 
+                            transform.name.Contains("Mesh") || 
+                            transform.name.Contains("Renderer"))
+                            continue;
+                            
+                        float distance = Vector3.Distance(avatarBone.position, transform.position);
+                        if (distance < bestDistance)
+                        {
+                            bestDistance = distance;
+                            bestMatch = transform;
+                        }
+                    }
+                    
+                    // 距離が十分近い場合のみ使用（しきい値は調整可能）
+                    if (bestDistance < 0.05f)
+                    {
+                        clothingBone = bestMatch;
                     }
                 }
                 
@@ -328,7 +531,8 @@ namespace VRChatAutoClothingTool
             // 重要な特定ボーン名が含まれているか確認
             foreach (var criticalName in criticalBoneNames)
             {
-                if (lowerName == criticalName.ToLower())
+                if (lowerName == criticalName.ToLower() || 
+                    NormalizeBoneName(lowerName) == NormalizeBoneName(criticalName.ToLower()))
                     return true;
             }
                 
@@ -675,9 +879,9 @@ namespace VRChatAutoClothingTool
             {
                 // Hand, Foot, Toe などの重要なボーンは広範囲に検索
                 bool isLeft = normalizedAvatarBoneName.Contains("_l") || normalizedAvatarBoneName.EndsWith("l") || 
-                              normalizedAvatarBoneName.Contains("left");
+                              normalizedAvatarBoneName.Contains("left") || normalizedAvatarBoneName.Contains(".l");
                 bool isRight = normalizedAvatarBoneName.Contains("_r") || normalizedAvatarBoneName.EndsWith("r") || 
-                               normalizedAvatarBoneName.Contains("right");
+                               normalizedAvatarBoneName.Contains("right") || normalizedAvatarBoneName.Contains(".r");
                 
                 bool isHand = normalizedAvatarBoneName.Contains("hand");
                 bool isFoot = normalizedAvatarBoneName.Contains("foot");
@@ -690,9 +894,11 @@ namespace VRChatAutoClothingTool
                     // 左右の一致
                     bool sideMatch = (isLeft && (normalizedClothingName.Contains("_l") || 
                                               normalizedClothingName.EndsWith("l") || 
+                                              normalizedClothingName.Contains(".l") ||
                                               normalizedClothingName.Contains("left"))) ||
                                    (isRight && (normalizedClothingName.Contains("_r") || 
                                               normalizedClothingName.EndsWith("r") || 
+                                              normalizedClothingName.Contains(".r") ||
                                               normalizedClothingName.Contains("right")));
                     
                     // 部位の一致
@@ -865,10 +1071,10 @@ namespace VRChatAutoClothingTool
                 if (name1.Contains(part) && name2.Contains(part))
                 {
                     // 左右の一致も確認
-                    bool name1IsLeft = name1.Contains("left") || name1.Contains(".l") || name1.EndsWith("l");
-                    bool name1IsRight = name1.Contains("right") || name1.Contains(".r") || name1.EndsWith("r");
-                    bool name2IsLeft = name2.Contains("left") || name2.Contains(".l") || name2.EndsWith("l");
-                    bool name2IsRight = name2.Contains("right") || name2.Contains(".r") || name2.EndsWith("r");
+                    bool name1IsLeft = name1.Contains("left") || name1.Contains(".l") || name1.EndsWith("l") || name1.Contains("_l");
+                    bool name1IsRight = name1.Contains("right") || name1.Contains(".r") || name1.EndsWith("r") || name1.Contains("_r");
+                    bool name2IsLeft = name2.Contains("left") || name2.Contains(".l") || name2.EndsWith("l") || name2.Contains("_l");
+                    bool name2IsRight = name2.Contains("right") || name2.Contains(".r") || name2.EndsWith("r") || name2.Contains("_r");
                     
                     // 左右が一致、または左右の指定がない場合
                     if ((name1IsLeft && name2IsLeft) || 
@@ -948,10 +1154,10 @@ namespace VRChatAutoClothingTool
                                 if (name2.Contains(variant2))
                                 {
                                     // 左右の一致も確認
-                                    bool name1IsLeft = name1.Contains("left") || name1.Contains(".l") || name1.EndsWith("l");
-                                    bool name1IsRight = name1.Contains("right") || name1.Contains(".r") || name1.EndsWith("r");
-                                    bool name2IsLeft = name2.Contains("left") || name2.Contains(".l") || name2.EndsWith("l");
-                                    bool name2IsRight = name2.Contains("right") || name2.Contains(".r") || name2.EndsWith("r");
+                                    bool name1IsLeft = name1.Contains("left") || name1.Contains(".l") || name1.EndsWith("l") || name1.Contains("_l");
+                                    bool name1IsRight = name1.Contains("right") || name1.Contains(".r") || name1.EndsWith("r") || name1.Contains("_r");
+                                    bool name2IsLeft = name2.Contains("left") || name2.Contains(".l") || name2.EndsWith("l") || name2.Contains("_l");
+                                    bool name2IsRight = name2.Contains("right") || name2.Contains(".r") || name2.EndsWith("r") || name2.Contains("_r");
                                     
                                     if ((name1IsLeft && name2IsLeft) || (name1IsRight && name2IsRight))
                                     {
