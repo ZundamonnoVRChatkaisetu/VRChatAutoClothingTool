@@ -49,6 +49,10 @@ namespace VRChatAutoClothingTool
         private bool preserveMeshShape = true;       // メッシュ形状を維持する
         private float preserveStrength = 0.5f;       // 形状維持の強度 (0-1)
         
+        // リアルタイムプレビュー機能
+        private bool isRealTimePreview = false;
+        private GameObject currentPreviewObject = null;
+        
         // UnityのGUIの更新間隔
         private const float GUI_UPDATE_INTERVAL = 0.1f;
         private float lastUpdateTime = 0f;
@@ -82,6 +86,9 @@ namespace VRChatAutoClothingTool
         {
             // エディタ更新イベントを解除
             EditorApplication.update -= OnEditorUpdate;
+            
+            // プレビューモードを終了
+            EndPreviewMode();
         }
         
         private void OnGUI()
@@ -134,6 +141,18 @@ namespace VRChatAutoClothingTool
                     lastUpdateTime = currentTime;
                 }
             }
+            
+            // リアルタイムプレビューが有効な場合も更新
+            if (isRealTimePreview && avatarObject != null && clothingObject != null)
+            {
+                float currentTime = Time.realtimeSinceStartup;
+                if (currentTime - lastUpdateTime > GUI_UPDATE_INTERVAL)
+                {
+                    UpdatePreview();
+                    Repaint();
+                    lastUpdateTime = currentTime;
+                }
+            }
         }
         
         private void DrawObjectSelectionSection()
@@ -158,6 +177,9 @@ namespace VRChatAutoClothingTool
                 if (clothingObject != null)
                 {
                     SaveOriginalClothingState();
+                    
+                    // プレビューを終了する
+                    EndPreviewMode();
                 }
             }
             
@@ -193,7 +215,15 @@ namespace VRChatAutoClothingTool
             {
                 EditorGUILayout.BeginHorizontal();
                 
-                EditorGUILayout.LabelField(mapping.BoneName, GUILayout.Width(150));
+                string displayName = mapping.BoneName;
+                if (mapping.IsUnmapped)
+                {
+                    // Unmappedであることを示す特別な表示
+                    GUI.color = new Color(0.8f, 0.8f, 1.0f);
+                }
+                
+                EditorGUILayout.LabelField(displayName, GUILayout.Width(150));
+                GUI.color = Color.white;
                 
                 EditorGUILayout.LabelField("アバター:", GUILayout.Width(60));
                 EditorGUI.BeginDisabledGroup(true);
@@ -215,12 +245,30 @@ namespace VRChatAutoClothingTool
             
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             
+            // リアルタイムプレビューを提供する
+            bool wasPreview = isRealTimePreview;
+            isRealTimePreview = EditorGUILayout.Toggle("リアルタイムプレビュー", isRealTimePreview);
+            
+            // プレビューモードが変更された場合
+            if (wasPreview != isRealTimePreview)
+            {
+                if (isRealTimePreview)
+                {
+                    StartPreviewMode();
+                }
+                else
+                {
+                    EndPreviewMode();
+                }
+            }
+            
             EditorGUI.BeginChangeCheck();
             globalScaleFactor = EditorGUILayout.Slider("全体スケール", globalScaleFactor, 0.1f, 3.0f);
-            if (EditorGUI.EndChangeCheck())
+            bool scaleChanged = EditorGUI.EndChangeCheck();
+            
+            if (scaleChanged && isRealTimePreview)
             {
-                // スケール設定が変更された場合のリアルタイムプレビュー（オプション）
-                // この部分では実装しないが、将来的にリアルタイムプレビューを追加可能
+                UpdatePreview();
             }
             
             EditorGUILayout.EndVertical();
@@ -327,8 +375,17 @@ namespace VRChatAutoClothingTool
             statusMessage = "ボーン構造を分析中...";
             isProcessing = true;
             
+            // プレビューモードを終了
+            EndPreviewMode();
+            
             // ボーン構造分析の実行
             boneMappings = boneAnalyzer.AnalyzeBones(avatarObject, clothingObject);
+            
+            // BoneMapping.SourceAnalyzerを設定
+            foreach (var mapping in boneMappings)
+            {
+                mapping.SourceAnalyzer = boneAnalyzer;
+            }
             
             isProcessing = false;
             statusMessage = $"{boneMappings.Count}個のボーンをマッピングしました。手動でマッピングを調整できます。";
@@ -352,6 +409,9 @@ namespace VRChatAutoClothingTool
             
             statusMessage = "衣装を調整中...";
             isProcessing = true;
+            
+            // プレビューモードを終了
+            EndPreviewMode();
             
             // 調整前の状態を保存
             SaveOriginalClothingState();
@@ -389,6 +449,55 @@ namespace VRChatAutoClothingTool
             
             // シーンビューの更新
             SceneView.RepaintAll();
+        }
+        
+        private void StartPreviewMode()
+        {
+            if (avatarObject == null || clothingObject == null)
+            {
+                statusMessage = "アバターと衣装の両方を選択してください。";
+                isRealTimePreview = false;
+                return;
+            }
+            
+            if (boneMappings.Count == 0)
+            {
+                // ボーン構造を分析
+                boneMappings = boneAnalyzer.AnalyzeBones(avatarObject, clothingObject);
+                
+                foreach (var mapping in boneMappings)
+                {
+                    mapping.SourceAnalyzer = boneAnalyzer;
+                }
+            }
+            
+            UpdatePreview();
+        }
+        
+        private void UpdatePreview()
+        {
+            if (!isRealTimePreview) return;
+            
+            // リアルタイムプレビューを更新
+            currentPreviewObject = clothingAdjuster.UpdateScalingPreview(
+                avatarObject,
+                clothingObject,
+                boneMappings,
+                globalScaleFactor
+            );
+            
+            statusMessage = "リアルタイムプレビュー中...スケーリングを調整してください。";
+        }
+        
+        private void EndPreviewMode()
+        {
+            isRealTimePreview = false;
+            
+            if (currentPreviewObject != null)
+            {
+                Object.DestroyImmediate(currentPreviewObject);
+                currentPreviewObject = null;
+            }
         }
         
         private void PreviewAdjustment()
@@ -434,14 +543,5 @@ namespace VRChatAutoClothingTool
                 // 必要に応じてここでリアルタイム更新を行うこともできる
             }
         }
-    }
-    
-    // ボーンマッピング用のクラス
-    [System.Serializable]
-    public class BoneMapping
-    {
-        public string BoneName;
-        public Transform AvatarBone;
-        public Transform ClothingBone;
     }
 }
